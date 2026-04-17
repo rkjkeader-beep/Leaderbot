@@ -7,3 +7,4 @@ flask
 pandas
 numpy
 python-binance
+anthropic>=0.40.0google-generativeai>=0.8.0psycopg2-binary>=2.9.9flask>=3.0.0matplotlib>=3.9.0numpy>=1.26.0requests>=2.31.0
