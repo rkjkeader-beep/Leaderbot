@@ -1,4 +1,5 @@
 
+
 #!/usr/bin/env python3
 """
 AlphaBot PRO v19 — Agent IA Adaptatif + Validateur Dual-AI
@@ -38,11 +39,11 @@ except ImportError:
 
 # ── Google Gemini SDK (Validateur alternatif) ────────────────────────
 try:
-  import google.genai as _genai_sdk
+    import google.genai as _genai_sdk
     _GEMINI_OK = True
 except ImportError:
     _GEMINI_OK = False
-    print("[GeminiAI] ⚠️  pip install google-generativeai pour le fallback Gemini")
+    print("[GeminiAI] ⚠️  pip install google-genai pour le fallback Gemini")
 
 # ══════════════════════════════════════════════════════
 #  CONFIG
@@ -111,7 +112,7 @@ CLAUDE_TOKENS    = 600
 
 # Clé API Gemini (var d'env prioritaire)
 GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6I8j_xOFnPsXkwFn_gbOa6oidS0E7l8cYWZqLPWmItkNA")
-GEMINI_MODEL     = "gemini-1.5-flash"   # rapide + économique
+GEMINI_MODEL     = "gemini-2.0-flash"   # rapide + économique
 
 # Sélection du moteur IA :
 #   auto   = Claude d'abord, Gemini en fallback si Claude échoue/absent
@@ -251,9 +252,10 @@ def _gemini_call(prompt: str) -> dict | None:
     if not _GEMINI_OK or not GEMINI_API_KEY:
         return None
     try:
-        _genai_sdk.configure(api_key=GEMINI_API_KEY)
-        model  = _genai_sdk.GenerativeModel(GEMINI_MODEL)
-        resp   = model.generate_content(prompt)
+        client = _genai_sdk.Client(api_key=GEMINI_API_KEY)
+        resp   = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt)
         raw    = resp.text.strip()
         if "```" in raw:
             raw = raw.split("```")[1]
