@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 AlphaBot PRO v18 — Agent IA Adaptatif
@@ -523,15 +524,6 @@ def get_trade_mode(m):
     if wd >= 5 and m["cat"] == "CRYPTO":
         return "SCALP"
     return "NORMAL"
-
-# ── Alias constantes v13 (rétrocompatibilité) ─────────────────────
-INACTIF_DAYS     = 3
-DATA_MAX_AGE_MIN = DATA_MAX_AGE
-BOT_USERNAME     = BOT_USER
-PRO_PROMO        = PRO_PRICE
-NB_AGENTS        = 20
-VIP_CHANNEL      = VIP_CH       # alias v13
-
 
 # ══════════════════════════════════════════════════════
 #  LOGGER
@@ -7839,4 +7831,3 @@ def main():
 
 if __name__=="__main__":
     main()
-
