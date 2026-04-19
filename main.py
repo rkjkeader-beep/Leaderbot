@@ -5547,32 +5547,53 @@ def handle_marches(uid):
 def handle_membres(uid, page=1):
     if not _admin_only(uid): return
     try:
-        PAGE = 20
+        PAGE = 15
         con  = _conn(); cur = con.cursor()
+
+        # ── Détection dynamique des colonnes ────────────────────────
+        try:
+            db_setup()
+        except Exception: pass
+        cur.execute("PRAGMA table_info(users)")
+        col_names = [r[1] for r in cur.fetchall()]
+        pk    = "user_id"    if "user_id"    in col_names else ("telegram_id" if "telegram_id" in col_names else "id")
+        un    = "username"   if "username"   in col_names else "'?'"
+        pl    = "plan"       if "plan"       in col_names else "'FREE'"
+        rc    = "ref_count"  if "ref_count"  in col_names else "0"
+        jo    = "joined"     if "joined"     in col_names else "NULL"
+        ex    = "pro_expires"if "pro_expires"in col_names else "NULL"
+
         cur.execute("SELECT COUNT(*) FROM users")
         total = cur.fetchone()[0]
         cur.execute(
-            "SELECT user_id,username,plan,ref_count,joined,pro_expires "
-            "FROM users ORDER BY joined DESC LIMIT ? OFFSET ?",
+            "SELECT {pk},{un},{pl},{rc},{jo},{ex} "
+            "FROM users ORDER BY {jo} DESC LIMIT ? OFFSET ?".format(
+                pk=pk, un=un, pl=pl, rc=rc, jo=jo, ex=ex),
             (PAGE, (page - 1) * PAGE))
         rows = cur.fetchall(); con.close()
-        tp   = max(1, (total + PAGE - 1) // PAGE)
+
+        tp = max(1, (total + PAGE - 1) // PAGE)
         if total == 0:
-            tg_send(uid, "\U0001f465 <b>MEMBRES</b>\n\nAucun membre enregistré."); return
-        msg = "\U0001f465 <b>MEMBRES {}/{}</b> ({} total)\n".format(page, tp, total)
-        msg += "\u2550" * 22 + "\n"
-        for row_uid, uname, plan, rc, joined, exp in rows:
-            icon = "\U0001f4a0" if plan == "PRO" else "\U0001f513"
-            j    = (joined or "")[:10]
-            e    = "  exp:" + exp[:10] if exp else ""
-            msg += "{} @{}  <code>{}</code>  \U0001f91d{}  {}{}\n".format(
-                icon, uname or "?", row_uid, rc, j, e)
-        msg += "\u2550" * 22 + "\n"
-        if page > 1:  msg += "\u2b05\ufe0f /membres {}  ".format(page - 1)
-        if page < tp: msg += "\u27a1\ufe0f /membres {}".format(page + 1)
+            tg_send(uid, "👥 <b>MEMBRES</b>\n\nAucun membre enregistré."); return
+
+        msg = "👥 <b>MEMBRES {}/{}</b>  ({} total)\n".format(page, tp, total)
+        msg += "═" * 22 + "\n"
+        for row in rows:
+            row_uid = row[0]; uname = row[1]; plan_ = row[2]
+            rc_val  = row[3]; joined_ = row[4]; exp_ = row[5]
+            icon = "💎" if str(plan_) == "PRO" else "🔓"
+            j    = (joined_ or "")[:10]
+            e    = "  exp:{}".format(exp_[:10]) if exp_ else ""
+            ref_link = "https://t.me/{}?start={}".format(BOT_USER, row_uid)
+            msg += "{} @{}  <code>{}</code>  🤝{}  {}{}\n".format(
+                icon, uname or "?", row_uid, rc_val or 0, j, e)
+            msg += "   🔗 <code>{}</code>\n".format(ref_link)
+        msg += "═" * 22 + "\n"
+        if page > 1:  msg += "⬅️ /membres {}  ".format(page - 1)
+        if page < tp: msg += "➡️ /membres {}".format(page + 1)
         tg_send(uid, msg)
     except Exception as ex:
-        tg_send(uid, "\u274c Erreur /membres : {}".format(str(ex)[:100]))
+        tg_send(uid, "❌ Erreur /membres : {}".format(str(ex)[:200]))
 
 
 def handle_monstatus(uid):
@@ -6338,41 +6359,84 @@ def send_admin_full(uid):
         kb=kb_admin_full())
 
 def send_admin_stats_full(uid):
-    if uid!=ADMIN_ID: return
-    total,pro,sigs,pays,g1d=global_stats(); st=db_daily_stats(); ws=db_weekly_stats()
-    con=_conn(); cur=con.cursor()
-    cur.execute("SELECT user_id,username,ref_count FROM users GROUP BY user_id ORDER BY ref_count DESC LIMIT 5")
-    top=cur.fetchall()
-    cur.execute("SELECT COUNT(*) FROM users WHERE joined>=date(\'now\',\'-1 day\')")
-    new1=cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM users WHERE joined>=date(\'now\',\'-7 days\')")
-    new7=cur.fetchone()[0]; con.close()
-    pend=pending_pays()
-    wr_d=int(st["wins"]/st["n"]*100) if st["n"] else 0
-    wr_w=int(ws["wins"]/ws["n"]*100) if ws["n"] else 0
-    msg=("📊 <b>STATS ALPHABOT PRO v10</b>\n"+"═"*22+"\n"
-         "👥 Total:{} PRO:{} FREE:{}\n"
-         "🆕 Nouveaux 24h:{} · 7j:{}\n"
-         "📡 Signaux:{} · Payés:{}\n\n"
-         "━"*20+"\n"
-         "📅 <b>AUJOURD\'HUI</b>\n"
-         "  {} sig · {} gagnants · {}% winrate\n"
-         "  Lot 0.01:+${}  Lot 1.00:+${}\n\n"
-         "📆 <b>CETTE SEMAINE</b>\n"
-         "  {} sig · {} gagnants · {}% winrate\n"
-         "  Lot 1.00:+${}\n\n").format(total,pro,total-pro,new1,new7,sigs,pays,
-             st["n"],st["wins"],wr_d,st["g001"],st["g1"],ws["n"],ws["wins"],wr_w,ws["g1"])
-    if top:
-        msg += "🤝 <b>TOP PARRAINS</b>\n"
-        seen=set()
-        for t_uid,uname,rc in top:
-            if t_uid not in seen:
-                seen.add(t_uid); msg += "  @{}  <b>{}</b> filleuls\n".format(uname or "?",rc)
-    if pend:
-        msg += "\n⏳ <b>ATTENTE PAIEMENT</b>\n"
-        for _,p_uid,un,tx,_ in pend:
-            msg += "• @{} <code>{}</code>  <code>{}</code>\n  /activate {}\n".format(un or "?",p_uid,(tx or "")[:16]+"...",p_uid)
-    tg_send(uid,msg,kb=kb_admin_back())
+    if uid != ADMIN_ID: return
+    try:
+        # ── Migration préventive : s'assurer que user_id existe ──────
+        try:
+            db_setup()
+        except Exception: pass
+
+        total, pro, sigs, pays, g1d = global_stats()
+        st = db_daily_stats(); ws = db_weekly_stats()
+        con = _conn(); cur = con.cursor()
+
+        # ── Détection dynamique du nom de la colonne PK ──────────────
+        try:
+            cur.execute("PRAGMA table_info(users)")
+            cols = [r[1] for r in cur.fetchall()]
+            pk = "user_id" if "user_id" in cols else ("telegram_id" if "telegram_id" in cols else "id")
+            rc_col = "ref_count" if "ref_count" in cols else "0"
+            un_col = "username" if "username" in cols else "'?'"
+            cur.execute(
+                "SELECT {pk},{un},{rc} FROM users GROUP BY {pk} ORDER BY {rc} DESC LIMIT 5".format(
+                    pk=pk, un=un_col, rc=rc_col))
+            top = cur.fetchall()
+        except Exception:
+            top = []
+
+        try:
+            cur.execute("SELECT COUNT(*) FROM users WHERE joined>=date('now','-1 day')")
+            new1 = cur.fetchone()[0]
+        except Exception:
+            new1 = 0
+        try:
+            cur.execute("SELECT COUNT(*) FROM users WHERE joined>=date('now','-7 days')")
+            new7 = cur.fetchone()[0]
+        except Exception:
+            new7 = 0
+        con.close()
+
+        pend   = pending_pays()
+        wr_d   = int(st["wins"] / st["n"] * 100) if st["n"] else 0
+        wr_w   = int(ws["wins"] / ws["n"] * 100) if ws["n"] else 0
+
+        msg = (
+            "📊 <b>STATS ALPHABOT PRO</b>\n" + "═"*22 + "\n"
+            "👥 Total:{} PRO:{} FREE:{}\n"
+            "🆕 Nouveaux 24h:{} · 7j:{}\n"
+            "📡 Signaux:{} · Payés:{}\n\n"
+            "━"*20 + "\n"
+            "📅 <b>AUJOURD'HUI</b>\n"
+            "  {} sig · {} gagnants · {}% winrate\n"
+            "  Lot 0.01:+${}  Lot 1.00:+${}\n\n"
+            "📆 <b>CETTE SEMAINE</b>\n"
+            "  {} sig · {} gagnants · {}% winrate\n"
+            "  Lot 1.00:+${}\n\n"
+        ).format(total, pro, total-pro, new1, new7, sigs, pays,
+                 st["n"], st["wins"], wr_d, st.get("g001",0), st["g1"],
+                 ws["n"], ws["wins"], wr_w, ws["g1"])
+
+        if top:
+            msg += "🤝 <b>TOP PARRAINS</b>\n"
+            seen = set()
+            for row in top:
+                t_uid, uname, rc = row[0], row[1], row[2]
+                if t_uid not in seen:
+                    seen.add(t_uid)
+                    ref_link = "https://t.me/{}?start={}".format(BOT_USER, t_uid)
+                    msg += "  @{}  <b>{}</b> filleuls  🔗 <code>{}</code>\n".format(
+                        uname or "?", rc, ref_link)
+
+        if pend:
+            msg += "\n⏳ <b>ATTENTE PAIEMENT</b>\n"
+            for _, p_uid, un, tx, _ in pend:
+                msg += "• @{} <code>{}</code>  <code>{}</code>\n  /activate {}\n".format(
+                    un or "?", p_uid, (tx or "")[:16]+"...", p_uid)
+
+        tg_send(uid, msg, kb=kb_admin_back())
+
+    except Exception as ex:
+        tg_send(uid, "❌ Erreur stats : {}".format(str(ex)[:200]), kb=kb_admin_back())
 
 def send_admin_payments_full(uid):
     if uid!=ADMIN_ID: return
