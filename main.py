@@ -3243,14 +3243,12 @@ def handle_pay_confirm(uid,uname):
 # ══════════════════════════════════════════════════════
 #  CLAVIERS & COMMANDES
 # ══════════════════════════════════════════════════════
-def kb_main(pro=False): return {"inline_keyboard":[
-    [{"text":"📡 Mes Signaux","callback_data":"signals"},{"text":"📊 Mon Compte","callback_data":"account"}],
-    [{"text":"💎 Devenir PRO","callback_data":"pay"} if not pro else {"text":"✅ PRO Actif","callback_data":"account"},{"text":"🤝 Parrainage","callback_data":"ref"}],
-    [{"text":"💸 Mes Gains","callback_data":"gains"},{"text":"📖 Guide ICT","callback_data":"guide"}],
-    [{"text":"📈 Rapports","callback_data":"rapports"},{"text":"🏦 Broker Exness","callback_data":"broker"}],
-    [{"text":"👑 Rejoindre groupe VIP","url": VIP_GROUP_LINK}] if pro else
-     [{"text":"📢 Rejoindre groupe FREE","url": FREE_GROUP_LINK}],
-]}
+def kb_main(pro=False): return {"keyboard":[
+    [{"text":"📡 Mes Signaux"},{"text":"📊 Mon Compte"}],
+    [{"text":"💰 Devenir PRO"} if not pro else {"text":"✅ PRO Actif"},{"text":"🤝 Parrainage"}],
+    [{"text":"💸 Mes Gains"},{"text":"📖 Guide ICT"}],
+    [{"text":"📈 Rapports"},{"text":"🏦 Broker Exness"}],
+],"resize_keyboard":True,"persistent":True}
 def kb_back(): return {"inline_keyboard":[[{"text":"◀️ Retour","callback_data":"start"}]]}
 
 def _group_invite_msg(pro=False):
@@ -6462,7 +6460,7 @@ def dispatch(uid, uname, txt):
     # ── Boutons menu — toutes variantes emoji couvertes ─────────────
     _SIG = {"📡 Mes Signaux","📩 Mes Signaux","🛰 Mes Signaux","Mes Signaux","mes signaux"}
     _CPT = {"📊 Mon Compte","📊 Mon compte","📊 Mon Tableau de Bord","Mon Compte","mon compte"}
-    _PRO = {"💰 Devenir PRO","💎 Devenir PRO","💠 Devenir PRO","💰 Paiement USDT","Devenir PRO"}
+    _PRO = {"💰 Devenir PRO","💎 Devenir PRO","💠 Devenir PRO","💰 Paiement USDT","Devenir PRO","✅ PRO Actif"}
     _PAR = {"🤝 Parrainage","🤝 Devenir Affilié","Parrainage","parrainage"}
     _GAI = {"💸 Mes Gains","💰 Mes Gains","📈 Mes Gains","Mes Gains","mes gains"}
     _GUI = {"📖 Guide ICT","📖 Guide AlphaBot","Guide ICT","guide ict"}
