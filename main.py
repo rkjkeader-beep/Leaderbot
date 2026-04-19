@@ -525,15 +525,6 @@ def get_trade_mode(m):
         return "SCALP"
     return "NORMAL"
 
-# ── Alias constantes v13 (rétrocompatibilité) ─────────────────────
-INACTIF_DAYS     = 3
-DATA_MAX_AGE_MIN = DATA_MAX_AGE
-BOT_USERNAME     = BOT_USER
-PRO_PROMO        = PRO_PRICE
-NB_AGENTS        = 20
-VIP_CHANNEL      = VIP_CH       # alias v13
-
-
 # ══════════════════════════════════════════════════════
 #  LOGGER
 # ══════════════════════════════════════════════════════
@@ -3291,7 +3282,7 @@ def _group_invite_msg(pro=False):
                                  [{"text":"◀️ Retour","callback_data":"start"}]]}
 
 def send_welcome(uid, uname):
-    db_register(uid, uname, tg_fn=tg_send)
+    db_register(uid, uname)
     p = is_pro(uid); ch = chal_get()
     plan = get_plan(uid)
     tg_sticker(uid, STK_W)
@@ -3309,7 +3300,7 @@ def send_welcome(uid, uname):
     tg_send(uid, inv_msg, kb=inv_kb)
 
 def send_account(uid,uname,forced=None):
-    plan=forced or get_plan(uid); _,exp,_=get_pro_info(uid)
+    plan=forced or get_plan(uid); _,exp,_=db_get_pro_info(uid)
     refs=get_refs(uid); td=count_today(uid); lim={"FREE":FREE_LIMIT,"PRO":PRO_LIMIT,"VIP":999}.get(plan,FREE_LIMIT)
     st=daily_stats(); ws=weekly_stats()
     plan_ico = {"FREE":"👀 FREE","PRO":"💎 PRO","VIP":"👑 VIP"}.get(plan,"📋")
@@ -4262,7 +4253,7 @@ def db_daily_stats(date_str=None):
     wins   = sum(1 for r in rows if r[2] >= 3.0)
     losses = len(rows) - wins
     return {
-        "date": date_str, "sig_count": len(rows), "wins": wins, "losses": losses,
+        "date": date_str, "n": len(rows), "sig_count": len(rows), "wins": wins, "losses": losses,
         "total_g001": round(sum(r[3] for r in rows), 2),
         "total_g1":   round(sum(r[4] for r in rows), 2),
         "rows": rows
@@ -5682,7 +5673,7 @@ def kb_admin_back(): return {"inline_keyboard":[[{"text":"◀️ Panel Admin","c
 #  MESSAGES UTILISATEURS COMPLETS
 # ══════════════════════════════════════════════════════
 def send_welcome(uid, uname, ref_by=0):
-    db_register(uid, uname, ref_by, tg_fn=tg_send)
+    db_register(uid, uname, ref_by)
     tg_sticker(uid, STK_W)
     p = is_pro(uid); sn,sm,sl_l,wknd = get_session()
     plan_line = ("🎁 <b>ESSAI PRO {} JOURS OFFERT !</b> ✅".format(TRIAL_DAYS) if p
@@ -5712,7 +5703,7 @@ def send_start(uid, uname, ref_by=0):
     send_welcome(uid, uname)
 
 def send_signals_info(uid):
-    p = is_pro(uid); st = daily_stats(); rows = st["rows"]
+    p = is_pro(uid); st = db_daily_stats(); rows = st["rows"]
     sn,sm,sl_l,wknd = get_session()
     cnt = count_today(uid); lim = PRO_LIMIT if p else FREE_LIMIT
     today = datetime.now().strftime("%d/%m/%Y")
@@ -5798,7 +5789,7 @@ def send_pay_plan(uid, plan_key="PRO"):
         ]})
 
 def send_mes_gains(uid):
-    st = daily_stats()
+    st = db_daily_stats()
     if not st["n"]: tg_send(uid,"💸 <b>MES GAINS</b>\n\nAucun signal aujourd\'hui.",kb=kb_back()); return
     lines = ["💸 <b>GAINS DU JOUR</b>","═"*22,""]
     for row in st["rows"]:
