@@ -3049,7 +3049,7 @@ def _scan_inner():
             mark_rep(ws, "weekly_rep"); _last_w = wk
     # Expirations
     for uid,uname in check_expiry():
-        _,_,src=get_pro_info(uid)
+        _,_,src=db_get_pro_info(uid)
         msg="⏰ <b>Essai {} jours terminé!</b>\n/pay → {}$ USDT".format(TRIAL_DAYS,PRO_PRICE) if src and "TRIAL" in (src or "") else "⏰ <b>PRO expiré</b>\n/pay → {}$ USDT\n/ref → {} filleuls = {} mois".format(PRO_PRICE,REF_TARGET,REF_MONTHS)
         tg_send(uid,msg)
     # Backup + relance + suivi TP/SL + scan IA
@@ -3301,7 +3301,7 @@ def send_welcome(uid, uname):
 
 def send_account(uid,uname,forced=None):
     plan=forced or get_plan(uid); _,exp,_=db_get_pro_info(uid)
-    refs=get_refs(uid); td=count_today(uid); lim={"FREE":FREE_LIMIT,"PRO":PRO_LIMIT,"VIP":999}.get(plan,FREE_LIMIT)
+    refs=db_get_refs(uid); td=count_today(uid); lim={"FREE":FREE_LIMIT,"PRO":PRO_LIMIT,"VIP":999}.get(plan,FREE_LIMIT)
     st=db_daily_stats(); ws=db_weekly_stats()
     plan_ico = {"FREE":"👀 FREE","PRO":"💎 PRO","VIP":"👑 VIP"}.get(plan,"📋")
     wr_d = int(st["wins"]/st["n"]*100) if st["n"] else 0
@@ -3431,7 +3431,7 @@ def send_broker(uid):
     tg_send(uid,"🏦 <b>BROKER — EXNESS</b>\n\n✅ Spread 0 pip (Raw)\n✅ Dépôt min 10$\n✅ FCA & CySEC\n✅ Crypto disponibles\n\n👉 <a href=\"{}\">🔗 Ouvrir Exness</a>".format(BROKER_LINK),kb=kb_back())
 
 def send_ref(uid,uname):
-    refs=get_refs(uid); link="https://t.me/{}?start={}".format(BOT_USER,uid)
+    refs=db_get_refs(uid); link="https://t.me/{}?start={}".format(BOT_USER,uid)
     done=min(refs,REF_TARGET); bar="█"*int(done/REF_TARGET*10)+"░"*(10-int(done/REF_TARGET*10))
     tg_send(uid,"🤝 <b>PARRAINAGE</b>\n"+"═"*22+"\n\n<b>{}/{}</b>  ({}%)\n[{}]\n\n🏆 {} filleuls = {} MOIS PRO\n\n🔗 <code>{}</code>".format(done,REF_TARGET,int(done/REF_TARGET*100),bar,REF_TARGET,REF_MONTHS,link),kb=kb_back())
 
@@ -4251,10 +4251,12 @@ def db_daily_stats(date_str=None):
     rows = rows or []
     wins   = sum(1 for r in rows if r[2] >= 3.0)
     losses = len(rows) - wins
+    g001_val = round(sum(r[3] for r in rows), 2)
+    g1_val   = round(sum(r[4] for r in rows), 2)
     return {
         "date": date_str, "n": len(rows), "sig_count": len(rows), "wins": wins, "losses": losses,
-        "total_g001": round(sum(r[3] for r in rows), 2),
-        "total_g1":   round(sum(r[4] for r in rows), 2),
+        "total_g001": g001_val, "total_g1": g1_val,
+        "g001": g001_val, "g1": g1_val,  # aliases for backward compat
         "rows": rows
     }
 
@@ -4570,10 +4572,13 @@ def db_weekly_stats():
         (week_start + " 00:00",))
     rows = rows or []
     wins = sum(1 for r in rows if r[2] >= 3.0)
+    g001_val = round(sum(r[3] for r in rows), 2)
+    g1_val   = round(sum(r[4] for r in rows), 2)
     return {
         "week_start": week_start, "n": len(rows), "sig_count": len(rows), "wins": wins,
-        "total_g001": round(sum(r[3] for r in rows), 2),
-        "total_g1":   round(sum(r[4] for r in rows), 2),
+        "total_g001": g001_val, "total_g1": g1_val,
+        "g001": g001_val, "g1": g1_val,  # aliases for backward compat
+        "ws": week_start,                 # alias used in weekly report formatting
         "rows": rows
     }
 
@@ -5730,11 +5735,11 @@ def send_pro_page(uid):
     p = is_pro(uid)
     if p:
         tg_sticker(uid, STK_PRO)
-        plan,exp,_ = get_pro_info(uid)
+        plan,exp,_ = db_get_pro_info(uid)
         tg_send(uid,"💠 <b>Plan {} actif !</b> ✅\n\nAccès : {}\nSignaux : max {}/j\n\nMerci 🙏".format(
             plan,"À VIE" if not exp else "expire le {}".format(exp),PRO_LIMIT),kb=kb_back())
         return
-    refs = get_refs(uid)
+    refs = db_get_refs(uid)
     tg_sticker(uid, STK_PRO)
     tg_send(uid,
         "💠 <b>PASSE AU NIVEAU SUPÉRIEUR</b>\n"+"═"*22+"\n\n"
@@ -5803,7 +5808,7 @@ def send_mes_gains(uid):
     tg_send(uid,"\n".join(lines),kb=kb_back())
 
 def send_affilie(uid, uname):
-    refs=get_refs(uid); link="https://t.me/{}?start={}".format(BOT_USER,uid)
+    refs=db_get_refs(uid); link="https://t.me/{}?start={}".format(BOT_USER,uid)
     done=min(refs,REF_TARGET); pct=int(done/REF_TARGET*100)
     fill=int(done/REF_TARGET*12); bar="🟩"*fill+"⬛"*(12-fill)
     tg_send(uid,
@@ -5950,9 +5955,9 @@ def send_admin_memory(uid):
 
 def handle_monstatus_full(uid):
     if uid!=ADMIN_ID: return
-    plan,exp,src=get_pro_info(uid); total,pro,sigs,pays,g1d=global_stats()
+    plan,exp,src=db_get_pro_info(uid); total,pro,sigs,pays,g1d=global_stats()
     sn,sm,sl_l,wknd=get_session(); st=db_daily_stats(); ws=db_weekly_stats()
-    cnt=count_today(uid); pend=pending_pays(); refs=get_refs(uid)
+    cnt=count_today(uid); pend=pending_pays(); refs=db_get_refs(uid)
     ch=chal_get(); reg=AI_REG
     win_pct=int(st["wins"]/st["n"]*100) if st["n"] else 0
     pend_str="\n⏳ <b>{} paiement(s) en attente !</b>".format(len(pend)) if pend else ""
@@ -7063,7 +7068,7 @@ def dispatch_cb(cb):
 
     # ── Parrainage ────────────────────────────────────────────
     elif data == "ref_stats":
-        refs = get_refs(uid)
+        refs = db_get_refs(uid)
         link = "https://t.me/{}?start={}".format(BOT_USER, uid)
         done = min(refs, REF_TARGET)
         bar  = "█"*int(done/REF_TARGET*10) + "░"*(10-int(done/REF_TARGET*10))
@@ -7139,7 +7144,7 @@ def dispatch_cb(cb):
     elif data.startswith("adm_pro_") and uid == ADMIN_ID:
         try:
             t_uid = int(data.split("_")[2])
-            plan, _, _ = get_pro_info(t_uid)
+            plan, _, _ = db_get_pro_info(t_uid)
             if plan != "PRO":
                 db_activate_pro(t_uid, "ADMIN", days=None)
                 tg_send(t_uid,
@@ -7159,7 +7164,7 @@ def dispatch_cb(cb):
     elif data.startswith("adm_ban_") and uid == ADMIN_ID:
         try:
             t_uid = int(data.split("_")[2])
-            plan, _, _ = get_pro_info(t_uid)
+            plan, _, _ = db_get_pro_info(t_uid)
             if plan == "PRO":
                 db_downgrade_pro(t_uid)
                 tg_send(t_uid,
