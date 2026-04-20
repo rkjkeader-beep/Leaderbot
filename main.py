@@ -1,5 +1,6 @@
 
 
+
 #!/usr/bin/env python3
 """
 AlphaBot PRO v19 — Agent IA Adaptatif + Validateur Dual-AI
@@ -840,6 +841,33 @@ from alphabot_pg import (
 )
 
 log("INFO", clr("DB v10 OK (backend: {})".format("PostgreSQL" if _USE_PG else "SQLite"), "b", "g"))
+
+# ── Wrappers normalisés — corrige l'incompatibilité de clés avec alphabot_pg ──
+# alphabot_pg retourne sig_count/total_g1/total_g001 mais le code attend n/g1/g001
+def daily_stats(date_str=None):
+    """Wrapper normalisé daily_stats → clés: n, g1, g001, wins, losses, rows, date"""
+    s = db_daily_stats(date_str)
+    return {
+        "n":      s.get("sig_count", 0),
+        "wins":   s.get("wins", 0),
+        "losses": s.get("losses", 0),
+        "g1":     s.get("total_g1", 0.0),
+        "g001":   s.get("total_g001", 0.0),
+        "rows":   s.get("rows", []),
+        "date":   s.get("date", ""),
+    }
+
+def weekly_stats():
+    """Wrapper normalisé weekly_stats → clés: n, g1, g001, wins, ws, rows"""
+    s = db_weekly_stats()
+    return {
+        "n":      s.get("sig_count", 0),
+        "wins":   s.get("wins", 0),
+        "g1":     s.get("total_g1", 0.0),
+        "g001":   s.get("total_g001", 0.0),
+        "rows":   s.get("rows", []),
+        "ws":     s.get("week_start", ""),
+    }
 
 def setup_key(sig):
     """
@@ -2737,7 +2765,7 @@ def _scan_inner():
             mark_rep(ws, "weekly_rep"); _last_w = wk
     # Expirations
     for uid,uname in check_expiry():
-        _,_,src=get_pro_info(uid)
+        _,_,src=db_get_pro_info(uid)
         msg="⏰ <b>Essai {} jours terminé!</b>\n/pay → {}$ USDT".format(TRIAL_DAYS,PRO_PRICE) if src and "TRIAL" in (src or "") else "⏰ <b>PRO expiré</b>\n/pay → {}$ USDT\n/ref → {} filleuls = {} mois".format(PRO_PRICE,REF_TARGET,REF_MONTHS)
         tg_send(uid,msg)
     # Backup + relance + suivi TP/SL + scan IA
@@ -2988,7 +3016,7 @@ def send_welcome(uid, uname):
     tg_send(uid, inv_msg, kb=inv_kb)
 
 def send_account(uid,uname,forced=None):
-    plan=forced or get_plan(uid); _,exp,_=get_pro_info(uid)
+    plan=forced or get_plan(uid); _,exp,_=db_get_pro_info(uid)
     refs=get_refs(uid); td=count_today(uid); lim={"FREE":FREE_LIMIT,"PRO":PRO_LIMIT,"VIP":999}.get(plan,FREE_LIMIT)
     st=daily_stats(); ws=weekly_stats()
     plan_ico = {"FREE":"👀 FREE","PRO":"💎 PRO","VIP":"👑 VIP"}.get(plan,"📋")
@@ -5445,7 +5473,7 @@ def send_pro_page(uid):
     p = is_pro(uid)
     if p:
         tg_sticker(uid, STK_PRO)
-        plan,exp,_ = get_pro_info(uid)
+        plan,exp,_=db_get_pro_info(uid)
         tg_send(uid,"💠 <b>Plan {} actif !</b> ✅\n\nAccès : {}\nSignaux : max {}/j\n\nMerci 🙏".format(
             plan,"À VIE" if not exp else "expire le {}".format(exp),PRO_LIMIT),kb=kb_back())
         return
@@ -5665,7 +5693,7 @@ def send_admin_memory(uid):
 
 def handle_monstatus_full(uid):
     if uid!=ADMIN_ID: return
-    plan,exp,src=get_pro_info(uid); total,pro,sigs,pays,g1d=global_stats()
+    plan,exp,src=db_get_pro_info(uid); total,pro,sigs,pays,g1d=global_stats()
     sn,sm,sl_l,wknd=get_session(); st=daily_stats(); ws=weekly_stats()
     cnt=count_today(uid); pend=pending_pays(); refs=get_refs(uid)
     ch=chal_get(); reg=AI_REG
@@ -6437,7 +6465,7 @@ def dispatch_cb(cb):
     elif data.startswith("adm_pro_") and uid == ADMIN_ID:
         try:
             t_uid = int(data.split("_")[2])
-            plan, _, _ = get_pro_info(t_uid)
+            plan,_,_=db_get_pro_info(t_uid)
             if plan != "PRO":
                 db_activate_pro(t_uid, "ADMIN", days=None)
                 tg_send(t_uid,
@@ -6457,7 +6485,7 @@ def dispatch_cb(cb):
     elif data.startswith("adm_ban_") and uid == ADMIN_ID:
         try:
             t_uid = int(data.split("_")[2])
-            plan, _, _ = get_pro_info(t_uid)
+            plan,_,_=db_get_pro_info(t_uid)
             if plan == "PRO":
                 db_downgrade_pro(t_uid)
                 tg_send(t_uid,
