@@ -57,9 +57,9 @@ VIP_GROUP_LINK  = os.getenv("VIP_GROUP_LINK",  "https://t.me/+alphabotvip")    #
 CLAUDE_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "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")
 CLAUDE_MODEL     = "claude-haiku-4-5-20251001"
 CLAUDE_TOKENS    = 1024
-GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6I8j_xOFnPsXkwFn_gbOa6oidS0E7l8cYWZqLPWmItkNA")
+GEMINI_API_KEY   = ""   # Gemini désactivé — clé Labs non compatible
 GEMINI_MODEL     = "gemini-2.0-flash"
-AI_VALIDATOR     = os.getenv("AI_VALIDATOR", "auto")
+AI_VALIDATOR     = "claude"   # Claude seul : technique + fondamental
 AI_SCORE_MIN     = 7.0
 AI_PROBA_MIN     = 55.0
 FINAL_HYBRID_MIN = 75.0
@@ -97,9 +97,8 @@ def _claude_session_risk(session: str) -> str:
 
 def _claude_build_prompt(sig: dict, session: str, htf_trend: str) -> str:
     """
-    Prompt Claude v21 — Rôle : Analyste FONDAMENTAL + NEWS + TIMING.
-    La qualité technique a déjà été validée par Gemini.
-    Claude se concentre sur : macro, news, heure/jour, TP atteignable.
+    Prompt Claude v22 — Validation TECHNIQUE + FONDAMENTALE + TIMING.
+    Claude valide les deux aspects en une seule passe.
     """
     now_utc   = datetime.now(timezone.utc)
     now_str   = now_utc.strftime("%H:%M UTC")
@@ -116,15 +115,17 @@ def _claude_build_prompt(sig: dict, session: str, htf_trend: str) -> str:
         risk_amt = abs(float(entry) - float(sl_v))
         tp1_dist = abs(float(tp) - float(entry))
         rr       = round(tp1_dist / risk_amt, 1) if risk_amt else "?"
-        tp2      = round(float(entry) + risk_amt * 4.5, 5) if sig.get("side") == "BUY"                    else round(float(entry) - risk_amt * 4.5, 5)
-        tp3      = round(float(entry) + risk_amt * 6.0, 5) if sig.get("side") == "BUY"                    else round(float(entry) - risk_amt * 6.0, 5)
-        # Temps estimé pour atteindre TP1 selon ATR
+        tp2      = round(float(entry) + risk_amt * 4.5, 5) if sig.get("side") == "BUY" \
+                   else round(float(entry) - risk_amt * 4.5, 5)
+        tp3      = round(float(entry) + risk_amt * 6.0, 5) if sig.get("side") == "BUY" \
+                   else round(float(entry) - risk_amt * 6.0, 5)
         atr_val  = float(sig.get("atr", risk_amt * 2) or risk_amt * 2)
         candles_to_tp = round(tp1_dist / atr_val) if atr_val else "?"
         mins_to_tp    = candles_to_tp * 15 if isinstance(candles_to_tp, (int, float)) else "?"
     except Exception:
         rr = tp2 = tp3 = "?"
         mins_to_tp = "?"
+        candles_to_tp = "?"
 
     # ── Section fondamentale ─────────────────────────────────────────
     cat        = sig.get("cat", "?")
@@ -152,7 +153,12 @@ def _claude_build_prompt(sig: dict, session: str, htf_trend: str) -> str:
     else:
         tech_fund_align = "➖ Neutre"
 
-    # ── News haute importance (cache ForexFactory) ───────────────────
+    # ── Données techniques ICT/SMC ───────────────────────────────────
+    score_algo = sig.get("score", 0)
+    badges     = sig.get("badges", "Aucun")
+    mode       = sig.get("mode", "ICT/SMC")
+
+    # ── News haute importance ────────────────────────────────────────
     news_lines = []
     try:
         news_data   = _get_news_data() or []
@@ -183,55 +189,64 @@ def _claude_build_prompt(sig: dict, session: str, htf_trend: str) -> str:
     # ── Contexte heure/jour ──────────────────────────────────────────
     in_killzone = (8 <= now_h <= 10) or (13 <= now_h <= 15)
     kz_str      = "✅ Dans kill zone institutionnelle" if in_killzone else "⚠️ Hors kill zone"
-    weekend     = now_utc.weekday() >= 4  # vendredi soir + weekend
+    weekend     = now_utc.weekday() >= 4
     day_ok_str  = "⚠️ Fin de semaine — liquidité réduite" if weekend else "✅ Jour de trading actif"
 
-    return """Tu es analyste MACRO et RISQUE d'un fonds institutionnel.
-Le setup technique a déjà été validé par notre algo ICT/SMC.
-Ta mission : vérifier UNIQUEMENT les 4 points suivants et valider si tout est OK.
+    return """Tu es analyste senior d'un fonds institutionnel. Tu valides SIMULTANÉMENT la qualité technique ET fondamentale du setup.
 
-══ SETUP (déjà validé techniquement) ═════════════════
+══ SETUP ICT/SMC ══════════════════════════════════════
 Instrument  : {pair} ({cat}) | {side}
 Session     : {session} | Biais HTF : {htf}
 Entrée      : {entry}  SL : {sl}  TP1 : {tp}
 RR          : 1:{rr}   TP2 : {tp2}   TP3 : {tp3}
 ATR M15     : {atr}
-Temps estimé TP1 : ~{mins_to_tp} min ({candles} bougies M15)
+Score algo  : {score}/100  |  Stratégie : {mode}
+Badges ICT  : {badges}
+Temps TP1   : ~{mins_to_tp} min ({candles} bougies M15)
 
-══ 1. FONDAMENTAUX ════════════════════════════════════
+══ 1. TECHNIQUE ICT/SMC ═══════════════════════════════
+Score algo  : {score}/100 (seuil min : 58)
+Biais HTF   : {htf}
+Stratégie   : {mode}
+Badges      : {badges}
+RR minimum  : 2.0 requis — actuel : 1:{rr}
+
+══ 2. FONDAMENTAUX ════════════════════════════════════
 Paire       : {base_cur} / {quote_cur}
 Score {base_cur} : {fund_base} pts   Score {quote_cur} : {fund_quote} pts
 Biais macro : {fund_direction}
 Alignement  : {tech_fund_align}
 Badge macro : {fund_badge}
 
-══ 2. NEWS HAUTE IMPORTANCE ═══════════════════════════
+══ 3. NEWS HAUTE IMPORTANCE ═══════════════════════════
 Statut      : {news_status_str}
 {news_block}
 
-══ 3. CONTEXTE HEURE / JOUR ═══════════════════════════
+══ 4. CONTEXTE HEURE / JOUR ═══════════════════════════
 Heure UTC   : {heure} ({day})
 Kill zone   : {kz_str}
 Jour        : {day_ok_str}
 
-══ 4. TP ATTEIGNABLE ? ════════════════════════════════
+══ 5. TP ATTEIGNABLE ? ════════════════════════════════
 TP1 distance: {tp1_dist_pct:.3f}% de l'entrée
-TP2         : {tp2}
-Volatilité  : ATR = {atr} (TP1 = {candles} bougies M15 estimées)
-Session en cours assez longue pour atteindre TP1 ?
+Volatilité  : ATR = {atr} (~{candles} bougies M15)
 
 ══ RÈGLE DE VALIDATION ════════════════════════════════
-VALIDER si :
+VALIDER si TOUS ces points sont verts :
+  ✅ Score algo ≥ 58/100
+  ✅ RR ≥ 2.0
+  ✅ Biais HTF aligné avec le trade
   ✅ Fondamentaux alignés ou neutres (pas CONTRE)
   ✅ Aucune news bloquante dans les 2h
-  ✅ Heure et jour favorables (pas weekend, pas hors session)
-  ✅ TP1 atteignable dans la session en cours (<4h estimé)
+  ✅ Heure et jour favorables
+  ✅ TP1 atteignable dans la session (<4h estimé)
 
 REJETER si l'un de ces points est rouge.
 
 Réponds UNIQUEMENT avec ce JSON exact :
 {{
   "verdict": "VALIDER" ou "REJETER",
+  "technique_ok": true ou false,
   "news_impact": "OK" ou "PRUDENCE" ou "BLOQUANT",
   "biais_fondamental": "ALIGNE" ou "NEUTRE" ou "CONTRE",
   "timing_ok": true ou false,
@@ -244,6 +259,7 @@ Réponds UNIQUEMENT avec ce JSON exact :
         atr=sig.get("atr","?"),
         mins_to_tp=mins_to_tp,
         candles=candles_to_tp,
+        score=score_algo, mode=mode, badges=badges,
         tp1_dist_pct=abs(float(tp)-float(entry))/float(entry)*100 if entry and tp and entry != "?" and tp != "?" else 0,
         base_cur=base_cur, quote_cur=quote_cur,
         fund_base=fund_base, fund_quote=fund_quote,
@@ -6496,7 +6512,8 @@ def send_promo_preview(uid, pid):
     if not p: return
     text=_build_promo(pid)
     if not text: tg_send(uid,"⚠️ Pas de signaux aujourd\'hui pour ce message.",kb={"inline_keyboard":[[{"text":"◀️ Retour","callback_data":"adm_promo_list"}]]}); return
-    total=len(set(pro_users()+free_users()))
+    def _uid(u): return u["user_id"] if isinstance(u, dict) else u
+    total=len({_uid(u) for u in pro_users()+free_users()})
     tg_send(uid,"👁 <b>APERÇU</b> — {}\n".format(p["label"])+"─"*22+"\n\n"+text+"\n\n"+"─"*22+"\n📤 Envoyer à <b>{}</b> membres ?".format(total),
         kb={"inline_keyboard":[[{"text":"✅ Envoyer à TOUS maintenant","callback_data":"adm_promo_send_{}".format(pid)}],[{"text":"◀️ Choisir autre message","callback_data":"adm_promo_list"}]]})
 
@@ -6504,7 +6521,8 @@ def broadcast_promo(uid, pid):
     if uid!=ADMIN_ID: return
     text=_build_promo(pid)
     if not text: tg_send(uid,"⚠️ Impossible de générer ce message."); return
-    users=list(set(pro_users()+free_users()))
+    def _uid(u): return u["user_id"] if isinstance(u, dict) else u
+    users=list({_uid(u) for u in pro_users()+free_users()})
     tg_send(uid,"📤 Envoi en cours à <b>{}</b> membres...".format(len(users)))
     sent=fail=0
     for u in users:
@@ -6524,7 +6542,8 @@ def handle_bcast_start(uid, target):
 def handle_bcast_msg(uid, text):
     if uid not in _bcast_pending: return False
     state=_bcast_pending.pop(uid); target=state["target"]
-    users=list(set(pro_users()+free_users())) if target=="ALL" else pro_users()
+    def _uid(u): return u["user_id"] if isinstance(u, dict) else u
+    users=list({_uid(u) for u in pro_users()+free_users()}) if target=="ALL" else [_uid(u) for u in pro_users()]
     tg_send(uid,"📤 Envoi en cours à <b>{}</b> membres...".format(len(users)))
     sent=fail=0
     for u in users:
