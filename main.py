@@ -239,13 +239,22 @@ TP1 distance: {tp1_dist_pct:.3f}% de l'entrée
 Volatilité  : ATR = {atr} (~{candles} bougies M15)
 
 ══ ANALYSE TECHNIQUE DÉTAILLÉE ════════════════════════
-Vérifie ces 6 confirmations :
-  1. Biais H1 confirmé ? (EMA20/50, HH-HL ou LL-LH, CHoCH)
+Vérifie ces confirmations ICT/SMC (badges détectés par l'algo) :
+  1. Biais H1 confirmé ? (EMA20/50, HH-HL ou LL-LH, CHoCH/BOS)
   2. Order Block M15 présent et non mitigé ?
-  3. FVG M15 actif dans la direction ?
+  3. FVG / Imbalance M15 actif dans la direction ?
   4. Confirmation M5 alignée ? (biais + structure LTF)
-  5. Entrée sur zone OTE / discount (BUY) ou premium (SELL) ?
-  6. RR ≥ 2.0 réel calculé sur ce setup ?
+  5. Entrée en zone Discount (BUY) ou Premium (SELL) ?
+  6. RR >= 2.0 réel calculé sur ce setup ?
+  7. BOS ou CHoCH M5 confirmé dans la direction ?
+  8. Mitigation Block présent (prix revient miter une zone) ?
+  9. Inducement (IDM) détecté — stops chassés avant le move ?
+  10. Liquidity Void / Imbalance Retest en cours ?
+  11. Order Flow Shift — momentum institutionnel croissant ?
+  12. Three Drives — épuisement et retournement ?
+
+Badges ICT présents dans ce setup : {badges}
+→ Utilise ces badges pour évaluer la qualité structurelle réelle.
 
 ══ ANALYSE FONDAMENTALE DÉTAILLÉE ════════════════════
   A. Quelle devise est la plus forte fondamentalement ?
@@ -254,16 +263,24 @@ Vérifie ces 6 confirmations :
   D. La corrélation DXY / matières premières confirme-t-elle ?
 
 ══ RÈGLE DE VALIDATION ════════════════════════════════
-VALIDER si :
-  ✅ Score algo ≥ 65/100
-  ✅ RR ≥ 2.0
-  ✅ Biais HTF aligné (H1 + M15 cohérents)
-  ✅ Fondamentaux ALIGNE ou NEUTRE (jamais CONTRE)
-  ✅ Aucune news BLOQUANTE dans les 2h
-  ✅ Au moins 3 confirmations techniques sur 6
+⚠️ IMPORTANT : Le score algo peut être bas ou insuffisant.
+Ton rôle est de VALIDER si TOI tu constates que :
 
-REJETER UNIQUEMENT si : fondamentaux CONTRE le trade OU news BLOQUANT.
-Pour tout le reste → VALIDER avec note de risque.
+  ✅ La STRUCTURE graphique confirme (OB, FVG, CHoCH, BOS, patterns)
+  ✅ Le BIAIS HTF H1 est clair et aligné avec la direction
+  ✅ Les FONDAMENTAUX confirment ou sont neutres (jamais CONTRE)
+  ✅ Les NEWS live ne bloquent pas (pas d'événement HIGH dans 30min)
+  ✅ RR >= 2.0 (le trade vaut le risque)
+
+VALIDER MEME SI score algo faible, si :
+  -> La structure technique est propre (zones claires, setup ICT valide)
+  -> Les fondamentaux / news live poussent dans la même direction
+  -> Le timing est acceptable (pas en rollover ou hors session complète)
+
+REJETER UNIQUEMENT si :
+  -> Fondamentaux ACTIVEMENT CONTRE le trade
+  -> News HIGH impactante dans moins de 30 minutes
+  -> Structure graphique totalement absente (pas d'OB, pas de biais H1)
 
 Réponds UNIQUEMENT avec ce JSON exact :
 {{
@@ -537,11 +554,12 @@ def claude_validate_signal(sig: dict, session: str, htf_trend: str) -> dict:
     news_block_ia = (news_impact == "BLOQUANT")
     fund_ok       = (biais_fond != "CONTRE")
 
+    # Validation : Claude a le dernier mot — seuls les fondamentaux CONTRE
+    # et les news BLOQUANTES sont des vetos absolus. Le timing et le score
+    # algo ne bloquent pas : Claude analyse la structure live et décide.
     validated = (verdict == "VALIDER"
                  and fund_ok           # macro pas contre le trade
-                 and not news_block_ia # pas de news bloquante
-                 and timing_ok)        # heure/jour favorables
-                 # tp_atteignable retiré v21 — TP n'est pas un critère bloquant
+                 and not news_block_ia) # pas de news bloquante immédiate
 
     result = {
         "validated"        : validated,
@@ -1802,14 +1820,212 @@ def pat_fake_breakout(c, bias):
         body = abs(last["c"] - last["o"])
         return last["c"] < prev["h"] and upper_wick > body * 1.5 and last["c"] < last["o"]
 
+
+def pat_bos_choch_confirm(c, bias):
+    """
+    BOS / CHoCH confirmé sur M5 :
+    - BOS  : cassure d'un swing high (BULLISH) ou low (BEARISH) avec clôture au-delà
+    - CHoCH: premier BOS dans la direction opposée à la tendance précédente
+    Signal fort de continuation ou retournement.
+    """
+    if len(c) < 15: return False, ""
+    H, L = [], []
+    for i in range(3, len(c)-3):
+        w = c[i-3:i+4]
+        if c[i]["h"] == max(x["h"] for x in w): H.append((i, c[i]["h"]))
+        if c[i]["l"] == min(x["l"] for x in w): L.append((i, c[i]["l"]))
+    last = c[-1]["c"]
+    if bias == "BULLISH" and len(H) >= 2:
+        if last > H[-1][1]:
+            prev_trend = H[-1][1] > H[-2][1]
+            return True, ("BOS ✓" if prev_trend else "CHoCH ✓")
+    if bias == "BEARISH" and len(L) >= 2:
+        if last < L[-1][1]:
+            prev_trend = L[-1][1] < L[-2][1]
+            return True, ("BOS ✓" if prev_trend else "CHoCH ✓")
+    return False, ""
+
+
+def pat_mitigation_block(c, bias):
+    """
+    Mitigation Block : bougie qui a créé un déséquilibre (FVG)
+    et que le prix revient miter (combler partiellement).
+    Zone de haute probabilité ICT.
+    """
+    if len(c) < 20: return False
+    lp = c[-1]["c"]
+    for i in range(len(c)-10, max(0, len(c)-50), -1):
+        if bias == "BULLISH":
+            # Chercher une bougie baissière forte suivie d'un mouvement haussier
+            if c[i]["c"] < c[i]["o"]:
+                body = c[i]["o"] - c[i]["c"]
+                # Le prix revient dans la bougie (mitigation)
+                if c[i]["c"] <= lp <= c[i]["o"] and body > 0:
+                    return True
+        else:
+            if c[i]["c"] > c[i]["o"]:
+                body = c[i]["c"] - c[i]["o"]
+                if c[i]["o"] <= lp <= c[i]["c"] and body > 0:
+                    return True
+    return False
+
+
+def pat_imbalance_retest(c, bias):
+    """
+    Imbalance / FVG Retest :
+    Déséquilibre créé entre 3 bougies (gap non comblé) que le prix revient tester.
+    Pattern ICT haute probabilité — confirmation que le marché reconnaît la zone.
+    """
+    if len(c) < 10: return False
+    lp = c[-1]["c"]
+    for i in range(1, min(len(c)-1, 40)):
+        if bias == "BULLISH":
+            gap_lo = c[i-1]["h"]
+            gap_hi = c[i+1]["l"]
+            if gap_hi > gap_lo * 1.0001:
+                mid = (gap_lo + gap_hi) / 2
+                if gap_lo * 0.9995 <= lp <= gap_hi * 1.0005:
+                    return True
+        else:
+            gap_hi = c[i-1]["l"]
+            gap_lo = c[i+1]["h"]
+            if gap_hi > gap_lo * 1.0001:
+                mid = (gap_hi + gap_lo) / 2
+                if gap_lo * 0.9995 <= lp <= gap_hi * 1.0005:
+                    return True
+    return False
+
+
+def pat_liquidity_void(c, bias):
+    """
+    Liquidity Void : zone où le prix a bougé très vite (peu de bougies, grand mouvement).
+    Le prix revient souvent combler ce vide — zone d'entrée SMC.
+    """
+    if len(c) < 20: return False
+    atr_v = sum(abs(x["c"]-x["o"]) for x in c[-14:]) / 14 if len(c) >= 14 else 0
+    if atr_v == 0: return False
+    lp = c[-1]["c"]
+    for i in range(5, min(len(c)-5, 60)):
+        move = abs(c[i]["c"] - c[i-3]["c"])
+        if move > atr_v * 3.0:  # mouvement > 3× ATR en peu de bougies = void
+            zone_lo = min(c[i]["c"], c[i-3]["c"])
+            zone_hi = max(c[i]["c"], c[i-3]["c"])
+            if zone_lo * 0.999 <= lp <= zone_hi * 1.001:
+                if bias == "BULLISH" and c[i]["c"] > c[i-3]["c"]:
+                    return True
+                if bias == "BEARISH" and c[i]["c"] < c[i-3]["c"]:
+                    return True
+    return False
+
+
+def pat_inducement(c, bias):
+    """
+    Inducement (IDM) : faux mouvement conçu pour piéger les retail traders.
+    Un swing mineur dépasse le dernier high/low puis le prix repart dans la direction originale.
+    Confirmation que les stops ont été chassés — setup institutionnel.
+    """
+    if len(c) < 15: return False
+    recent = c[-15:]
+    lp = recent[-1]["c"]
+    if bias == "BULLISH":
+        # Recherche d'un spike bas suivi de rejet fort
+        lows = [x["l"] for x in recent[:-3]]
+        if not lows: return False
+        ref_low = min(lows)
+        spike_candle = min(recent[-6:-1], key=lambda x: x["l"])
+        if spike_candle["l"] < ref_low and lp > ref_low:
+            wick = min(spike_candle["o"], spike_candle["c"]) - spike_candle["l"]
+            body = abs(spike_candle["c"] - spike_candle["o"])
+            return wick > body * 1.2
+    else:
+        highs = [x["h"] for x in recent[:-3]]
+        if not highs: return False
+        ref_high = max(highs)
+        spike_candle = max(recent[-6:-1], key=lambda x: x["h"])
+        if spike_candle["h"] > ref_high and lp < ref_high:
+            wick = spike_candle["h"] - max(spike_candle["o"], spike_candle["c"])
+            body = abs(spike_candle["c"] - spike_candle["o"])
+            return wick > body * 1.2
+    return False
+
+
+def pat_premium_discount(c, bias):
+    """
+    Premium / Discount Zone (ICT) :
+    - BUY dans la zone Discount (< 50% du range récent) — prix bas = valeur
+    - SELL dans la zone Premium (> 50% du range récent) — prix haut = overvalué
+    Basé sur la théorie des prix institutionnels ICT.
+    """
+    if len(c) < 30: return False
+    highs = [x["h"] for x in c[-30:]]
+    lows  = [x["l"] for x in c[-30:]]
+    rng_h = max(highs); rng_l = min(lows)
+    if rng_h <= rng_l: return False
+    mid   = (rng_h + rng_l) / 2
+    lp    = c[-1]["c"]
+    equilibrium_band = (rng_h - rng_l) * 0.08  # 8% autour du mid
+    if bias == "BULLISH":
+        return lp < mid - equilibrium_band  # discount
+    else:
+        return lp > mid + equilibrium_band  # premium
+
+
+def pat_three_drives(c, bias):
+    """
+    Three Drives Pattern : 3 poussées successives avec des hauts/bas décroissants.
+    Indique l'épuisement du mouvement — retournement imminent.
+    """
+    if len(c) < 30: return False
+    if bias == "BEARISH":
+        # 3 hauts décroissants
+        highs = [x["h"] for x in c[-30:]]
+        h1 = max(highs[:10]); h2 = max(highs[10:20]); h3 = max(highs[20:])
+        return h1 > h2 > h3 and abs(h1-h3)/h1 > 0.003
+    else:
+        lows = [x["l"] for x in c[-30:]]
+        l1 = min(lows[:10]); l2 = min(lows[10:20]); l3 = min(lows[20:])
+        return l1 < l2 < l3 and abs(l3-l1)/l1 > 0.003
+
+
+def pat_order_flow_shift(c, bias):
+    """
+    Order Flow Shift : changement du flux d'ordres détecté sur les dernières bougies.
+    Série de bougies de plus en plus fortes dans la direction du bias = momentum institutionnel.
+    """
+    if len(c) < 6: return False
+    recent = c[-5:]
+    if bias == "BULLISH":
+        bull_bodies = [abs(x["c"]-x["o"]) for x in recent if x["c"] > x["o"]]
+        bear_bodies = [abs(x["c"]-x["o"]) for x in recent if x["c"] < x["o"]]
+        if len(bull_bodies) >= 3 and recent[-1]["c"] > recent[-1]["o"]:
+            avg_bull = sum(bull_bodies) / len(bull_bodies)
+            avg_bear = sum(bear_bodies) / len(bear_bodies) if bear_bodies else 0
+            return avg_bull > avg_bear * 1.5
+    else:
+        bear_bodies = [abs(x["c"]-x["o"]) for x in recent if x["c"] < x["o"]]
+        bull_bodies = [abs(x["c"]-x["o"]) for x in recent if x["c"] > x["o"]]
+        if len(bear_bodies) >= 3 and recent[-1]["c"] < recent[-1]["o"]:
+            avg_bear = sum(bear_bodies) / len(bear_bodies)
+            avg_bull = sum(bull_bodies) / len(bull_bodies) if bull_bodies else 0
+            return avg_bear > avg_bull * 1.5
+    return False
+
 def pattern_score_m5(c, bias):
     """
-    Calcule le bonus de score total des patterns M5.
+    Calcule le bonus de score total des patterns M5 + SMC avancés.
     Retourne (score_bonus, liste_badges).
-    Max +50 pts. Tous optionnels.
+    Max +100 pts. Tous optionnels — Claude valide en final.
+
+    Patterns inclus :
+    ─ Classiques  : H&S, Double Top/Bot, Breakout, Fake BO
+    ─ SMC/ICT     : BOS/CHoCH, Mitigation Block, Imbalance Retest,
+                    Liquidity Void, Inducement, Premium/Discount,
+                    Three Drives, Order Flow Shift
     """
-    if not c or len(c) < 20: return 0, []
+    if not c or len(c) < 10: return 0, []
     score = 0; badges = []
+
+    # ── Patterns classiques ──────────────────────────────────────
     if pat_head_shoulders(c, bias):
         score += 15
         badges.append("H&S ✓" if bias=="BEARISH" else "IH&S ✓")
@@ -1822,7 +2038,42 @@ def pattern_score_m5(c, bias):
     if pat_fake_breakout(c, bias):
         score += 15
         badges.append("Fake BO ✓")
-    return min(score, 50), badges
+
+    # ── Patterns SMC/ICT avancés ─────────────────────────────────
+    bos_ok, bos_label = pat_bos_choch_confirm(c, bias)
+    if bos_ok:
+        score += 20
+        badges.append(bos_label)
+
+    if pat_mitigation_block(c, bias):
+        score += 16
+        badges.append("Mitigation ✓")
+
+    if pat_imbalance_retest(c, bias):
+        score += 14
+        badges.append("Imbalance ✓")
+
+    if pat_liquidity_void(c, bias):
+        score += 12
+        badges.append("Liq.Void ✓")
+
+    if pat_inducement(c, bias):
+        score += 18
+        badges.append("IDM ✓")
+
+    if pat_premium_discount(c, bias):
+        score += 10
+        badges.append("Discount ✓" if bias=="BULLISH" else "Premium ✓")
+
+    if pat_three_drives(c, bias):
+        score += 14
+        badges.append("3 Drives ✓")
+
+    if pat_order_flow_shift(c, bias):
+        score += 12
+        badges.append("OFS ✓")
+
+    return min(score, 100), badges
 
 # ══════════════════════════════════════════════════════
 #  AGENT ANALYZE PRINCIPAL
@@ -2718,9 +2969,10 @@ def ai_open(setup):
 
 
 def ai_check():
-    """Challenge IA désactivé — fonction conservée pour compatibilité."""
-    pass
+    """Suivi des trades Challenge IA ouverts (TP/SL/BE)."""
     ch = chal_get()
+    with _ai_lk:
+        trades = list(AI_OT.values())
     for t in trades:
         if t["status"] != "open": continue
         price = bn_price(t["symbol"])
@@ -4680,23 +4932,19 @@ def _scan_and_send_inner():
     if CLAUDE_API_KEY or GEMINI_API_KEY:
         sigs_validated_ai = []
         for sig, key in sigs_raw:
-            if sig.get("rr", 0) >= 2.0 and sig.get("score", 0) >= sm:
-                htf_trend  = sig.get("bias", "BULLISH")
-                ai_result  = claude_validate_signal(sig, sn, htf_trend)
-                sig["ai_result"] = ai_result
-                # Injecter les données fondamentales IA dans le signal
-                if ai_result.get("biais_fondamental"): sig["fund_bias_ia"]  = ai_result["biais_fondamental"]
-                if ai_result.get("news_impact"):        sig["news_impact_ia"] = ai_result["news_impact"]
-                if ai_result["validated"]:
-                    sigs_validated_ai.append((sig, key))
-                else:
-                    log("AI", "❌ {} rejeté — {} (hybride {}/100)".format(
-                        sig["name"],
-                        ai_result.get("raison","?")[:60],
-                        ai_result.get("final_score", 0)))
-            else:
-                sig["ai_result"] = {}
+            # Claude analyse TOUS les signaux (même score < sm)
+            # C'est Claude qui décide selon structure + fondamentaux + news live
+            htf_trend  = sig.get("bias", "BULLISH")
+            ai_result  = claude_validate_signal(sig, sn, htf_trend)
+            sig["ai_result"] = ai_result
+            if ai_result.get("biais_fondamental"): sig["fund_bias_ia"]  = ai_result["biais_fondamental"]
+            if ai_result.get("news_impact"):        sig["news_impact_ia"] = ai_result["news_impact"]
+            if ai_result["validated"]:
                 sigs_validated_ai.append((sig, key))
+            else:
+                log("AI", "❌ {} rejeté par IA — {}".format(
+                    sig["name"],
+                    ai_result.get("raison","?")[:80]))
         log("AI", "Filtre IA : {}/{} setups validés".format(len(sigs_validated_ai), len(sigs_raw)))
         sigs_raw = sigs_validated_ai
     # ─────────────────────────────────────────────────────────────────────
@@ -8747,4 +8995,5 @@ def main():
 
 if __name__=="__main__":
     main()
+
 
