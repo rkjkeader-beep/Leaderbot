@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 AlphaBot PRO v20 — Agent IA Adaptatif + Validateur Dual-AI + Challenge IA
@@ -23,21 +24,9 @@ from queue import Queue, Empty
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from collections import defaultdict, deque
 
-# ── Anthropic SDK (Claude AI Validator) ─────────────────────────────
-try:
-    import anthropic as _anthropic_sdk
-    _ANTHROPIC_OK = True
-except ImportError:
-    _ANTHROPIC_OK = False
-    print("[ClaudeAI] ⚠️  pip install anthropic requis pour la validation IA")
-
-# ── Google Gemini SDK (Validateur alternatif) ────────────────────────
-try:
-    import google.genai as _genai_sdk
-    _GEMINI_OK = True
-except ImportError:
-    _GEMINI_OK = False
-    print("[GeminiAI] ⚠️  pip install google-genai pour le fallback Gemini")
+# ── IA externe désactivée — algo ICT/SMC seul ───────────────────────
+_ANTHROPIC_OK = False
+_GEMINI_OK    = False
 
 # ══════════════════════════════════════════════════════
 #  CONFIG
@@ -59,19 +48,17 @@ VIP_GROUP_LINK  = os.getenv("VIP_GROUP_LINK",  "https://t.me/+alphabotvip")    #
 # ══════════════════════════════════════════════════════════════════════
 #  MODULE CLAUDE AI — VALIDATEUR EXPERT ICT/SMC
 # ══════════════════════════════════════════════════════════════════════
-CLAUDE_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "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")
-CLAUDE_MODEL     = "claude-haiku-4-5-20251001"     # ✅ model string valide — rapide + économique
-CLAUDE_TOKENS    = 600
-GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "")  # Optionnel — fallback auto
-GEMINI_MODEL     = "gemini-2.0-flash"
-# AI_VALIDATOR : auto = Claude prioritaire → Gemini fallback si Claude échoue
-#   claude = Claude seul | gemini = Gemini seul | both = vote majoritaire
-AI_VALIDATOR     = os.getenv("AI_VALIDATOR", "auto")
-AI_SCORE_MIN     = 7.0
-AI_PROBA_MIN     = 55.0
-FINAL_HYBRID_MIN = 75.0
-AI_WEIGHT        = 0.40
-ALGO_WEIGHT      = 0.60
+CLAUDE_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "")  # clé via variable d'env Render
+CLAUDE_MODEL     = os.getenv("CLAUDE_MODEL", "claude-haiku-4-5")
+CLAUDE_TOKENS    = 500
+GEMINI_API_KEY   = ""   # désactivé
+GEMINI_MODEL     = ""
+AI_VALIDATOR     = "none"
+AI_SCORE_MIN     = 0.0
+AI_PROBA_MIN     = 0.0
+FINAL_HYBRID_MIN = 0.0
+AI_WEIGHT        = 0.0
+ALGO_WEIGHT      = 1.0
 _ai_cache     = {}
 _ai_cache_ttl = 300
 _ai_lock      = threading.Lock()
@@ -80,13 +67,101 @@ _LAI          = logging.getLogger("ClaudeAI")
 # ── Circuit-Breaker IA ────────────────────────────────────────────────
 # Si les deux IA échouent consécutivement, les signaux sont BLOQUÉS
 # (plus de bypass silencieux). L'admin reçoit une alerte Telegram.
-_CB_THRESHOLD      = 3          # échecs consécutifs avant déclenchement
-_CB_RESET_SEC      = 600        # reset auto après 10 min sans erreur
+_CB_THRESHOLD      = 999999     # circuit-breaker désactivé
+_CB_RESET_SEC      = 60
 _cb_lock           = threading.Lock()
-_cb_failures       = 0          # compteur d'échecs IA consécutifs
-_cb_triggered      = False      # True = circuit ouvert → signaux bloqués
-_cb_last_fail_ts   = 0.0        # timestamp du dernier échec
-_cb_last_alert_ts  = 0.0        # anti-spam : une alerte toutes les 5 min max
+_cb_failures       = 0
+_cb_triggered      = False
+_cb_last_fail_ts   = 0.0
+_cb_last_alert_ts  = 0.0
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  CLAUDE — ANALYSE FONDAMENTALE POST-SIGNAL (non-bloquante)
+#  Le signal est déjà envoyé. Claude commente en message séparé.
+# ══════════════════════════════════════════════════════════════════════
+
+def claude_fundamental_comment(sig: dict, session: str):
+    """
+    Appelle Claude pour générer un commentaire fondamental sur le signal
+    déjà envoyé. Retourne le texte HTML ou None si indisponible.
+    Timeout 15s — jamais bloquant.
+    """
+    if not CLAUDE_API_KEY:
+        return None
+    try:
+        import anthropic as _sdk
+    except ImportError:
+        return None
+
+    pair   = sig.get("name", "?")
+    side   = "ACHAT 📈" if sig.get("side") == "BUY" else "VENTE 📉"
+    entry  = sig.get("entry", "?")
+    sl     = sig.get("sl", "?")
+    tp     = sig.get("tp", "?")
+    score  = sig.get("score", 0)
+    rr     = sig.get("rr", "?")
+    bias   = sig.get("bias", "NEUTRAL")
+
+    prompt = (
+        "Tu es analyste macro senior. Un signal de trading vient d'être envoyé :\n\n"
+        "Paire : {pair} | Direction : {side}\n"
+        "Entrée : {entry}  SL : {sl}  TP : {tp}  RR : 1:{rr}\n"
+        "Biais technique H1 : {bias} | Score algo : {score}/100\n"
+        "Session : {session}\n\n"
+        "En 4-6 phrases max, donne une analyse fondamentale utile pour ce trade :\n"
+        "1. Contexte macro actuel pour cet instrument (dollar, risk-on/off, données récentes)\n"
+        "2. Ce que les institutionnels regardent sur cette paire en ce moment\n"
+        "3. Un niveau ou catalyseur clé à surveiller (news, session, niveau technique HTF)\n"
+        "4. Comment gérer le trade si le marché hésite avant TP\n\n"
+        "Réponds directement en français, style professionnel concis, sans titre ni bullet points."
+    ).format(pair=pair, side=side, entry=entry, sl=sl, tp=tp,
+             rr=rr, bias=bias, score=score, session=session)
+
+    try:
+        client = _sdk.Anthropic(api_key=CLAUDE_API_KEY)
+        resp   = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=CLAUDE_TOKENS,
+            messages=[{"role": "user", "content": prompt}],
+            timeout=15
+        )
+        text = resp.content[0].text.strip()
+        if not text:
+            return None
+        msg = (
+            "🧠 <b>Analyse Fondamentale — {pair}</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "{text}\n\n"
+            "<i>📌 Analyse complémentaire — le signal reste valide selon l'algo ICT/SMC.</i>"
+        ).format(pair=pair, text=text)
+        return msg
+    except Exception as e:
+        logging.getLogger("ClaudeAI").warning("claude_fundamental_comment: {}".format(e))
+        return None
+
+
+def _send_fundamental_comment_async(sig: dict, session: str, targets: list):
+    """
+    Lance l'analyse fondamentale Claude en thread séparé.
+    Envoie le résultat aux cibles (channel VIP + DM PRO) sans bloquer le scan.
+    targets = liste de chat_id
+    """
+    def _run():
+        try:
+            msg = claude_fundamental_comment(sig, session)
+            if not msg:
+                return
+            for chat_id in targets:
+                try:
+                    tg_send(chat_id, msg)
+                    time.sleep(0.05)
+                except Exception:
+                    pass
+        except Exception as e:
+            logging.getLogger("ClaudeAI").warning("_send_fundamental_comment_async: {}".format(e))
+
+    threading.Thread(target=_run, daemon=True, name="FundComment").start()
 
 
 def _cb_record_failure() -> bool:
@@ -3729,65 +3804,8 @@ def _scan_inner():
     with _sent_lk: sigs = [(s, k) for s, k in sigs if k not in _sent]
     sigs.sort(key=lambda x: -x[0]["score"])
 
-    # ── ✨ Pipeline IA : Gemini (détection) → Claude (validation) ──
-    # Étape 1 — Gemini filtre les setups prometteurs
-    if _GEMINI_OK and GEMINI_API_KEY and sigs:
-        sigs_gemini = []
-        for sig, key in sigs:
-            if sig.get("rr", 0) >= 2.0 and sig.get("score", 0) >= sm:
-                gem = gemini_scan_signal(sig, sn)
-                sig["gemini_scan"] = gem
-                if gem["approved"]:
-                    sigs_gemini.append((sig, key))
-                else:
-                    log("AI", "🔍 Gemini rejette {} — {}".format(
-                        sig["name"], gem.get("raison","?")[:60]))
-            else:
-                sig["gemini_scan"] = {"approved": True, "score_setup": 5, "raison": "Score < seuil, bypass Gemini"}
-                sigs_gemini.append((sig, key))
-        log("AI", "Gemini scan : {}/{} setups retenus".format(len(sigs_gemini), len(sigs)))
-        sigs = sigs_gemini
-
-    # Étape 2 — Claude valide le risque sur les setups approuvés par Gemini
-    if CLAUDE_API_KEY and sigs:
-        sigs_validated = []
-        for sig, key in sigs:
-            if sig.get("rr", 0) >= 2.0 and sig.get("score", 0) >= sm:
-                htf_trend = sig.get("bias", "BULLISH")
-                ai_result = claude_validate_signal(sig, sn, htf_trend)
-                sig["ai_result"] = ai_result
-                if ai_result["validated"]:
-                    sigs_validated.append((sig, key))
-                else:
-                    log("AI", "❌ Claude rejette {} — {} (hybride {}/100)".format(
-                        sig["name"],
-                        ai_result.get("raison","?")[:60],
-                        ai_result.get("final_score", 0)))
-            else:
-                sig["ai_result"] = {}
-                sigs_validated.append((sig, key))
-        log("AI", "Claude validation : {}/{} validés".format(len(sigs_validated), len(sigs)))
-        sigs = sigs_validated
-
-        # ── Optimisation TP/SL par Claude sur les signaux validés ──
-        for idx, (sig, key) in enumerate(sigs):
-            if sig.get("ai_result", {}).get("validated"):
-                try:
-                    opt = claude_optimize_tp_sl(sig, sn)
-                    if opt:
-                        if opt.get("sl_optimise"):
-                            sig["sl_ai"] = opt["sl_optimise"]
-                        if opt.get("tp1_optimise"):
-                            sig["tp_ai"] = opt["tp1_optimise"]
-                        if opt.get("tp2"):
-                            sig["tp2"]   = opt["tp2"]
-                        if opt.get("rr_tp2"):
-                            sig["rr_tp2"] = opt["rr_tp2"]
-                        sig["ai_note"] = opt.get("note", "")
-                        sigs[idx] = (sig, key)
-                except Exception as _oe:
-                    log("WARN", "Optim TP/SL: {}".format(_oe))
-    # ─────────────────────────────────────────────────────────────
+    # ── Pipeline IA désactivé — tous les signaux algo passent directement ──
+    # (Claude + Gemini supprimés — algo ICT/SMC seul)
 
 
 
@@ -3855,6 +3873,9 @@ def _scan_inner():
             _throttle_record(now_check)
             log("SIG", "{} {} RR:1:{} Sc:{} G1:+${}".format(
                 clr(sig["name"], "b", "c"), sig["side"], sig["rr"], sc, sig["g1"]))
+            # ── Analyse fondamentale Claude (non-bloquante, message séparé) ──
+            fund_targets = [VIP_CH]  # groupe VIP + les PRO seront notifiés via DM ci-dessous
+            _send_fundamental_comment_async(sig, sn, fund_targets)
 
         # ── DM individuels : 1 seul message + bouton recheck ──────────
         # ── Stocker signal actif pour recheck live ──────────────
@@ -9071,5 +9092,4 @@ def main():
 
 if __name__=="__main__":
     main()
-
 
