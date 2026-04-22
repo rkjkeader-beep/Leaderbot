@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 AlphaBot PRO v20 — Agent IA Adaptatif + Validateur Dual-AI + Challenge IA
@@ -61,7 +60,7 @@ VIP_GROUP_LINK  = os.getenv("VIP_GROUP_LINK",  "https://t.me/+alphabotvip")    #
 #  MODULE CLAUDE AI — VALIDATEUR EXPERT ICT/SMC
 # ══════════════════════════════════════════════════════════════════════
 CLAUDE_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "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")
-CLAUDE_MODEL     = "claude-sonnet-4-5-20250514"   # ✨ Sonnet — meilleure qualité d'analyse
+CLAUDE_MODEL     = "claude-sonnet-4-5"              # ✅ model string correct (Anthropic API 2025)
 CLAUDE_TOKENS    = 600
 GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "")  # Optionnel — fallback auto
 GEMINI_MODEL     = "gemini-2.0-flash"
@@ -77,6 +76,71 @@ _ai_cache     = {}
 _ai_cache_ttl = 300
 _ai_lock      = threading.Lock()
 _LAI          = logging.getLogger("ClaudeAI")
+
+# ── Circuit-Breaker IA ────────────────────────────────────────────────
+# Si les deux IA échouent consécutivement, les signaux sont BLOQUÉS
+# (plus de bypass silencieux). L'admin reçoit une alerte Telegram.
+_CB_THRESHOLD      = 3          # échecs consécutifs avant déclenchement
+_CB_RESET_SEC      = 600        # reset auto après 10 min sans erreur
+_cb_lock           = threading.Lock()
+_cb_failures       = 0          # compteur d'échecs IA consécutifs
+_cb_triggered      = False      # True = circuit ouvert → signaux bloqués
+_cb_last_fail_ts   = 0.0        # timestamp du dernier échec
+_cb_last_alert_ts  = 0.0        # anti-spam : une alerte toutes les 5 min max
+
+
+def _cb_record_failure() -> bool:
+    """
+    Enregistre un échec IA double (Claude + Gemini = None).
+    Retourne True si le circuit-breaker vient de se déclencher.
+    """
+    global _cb_failures, _cb_triggered, _cb_last_fail_ts, _cb_last_alert_ts
+    with _cb_lock:
+        _cb_failures     += 1
+        _cb_last_fail_ts  = time.time()
+        if _cb_failures >= _CB_THRESHOLD and not _cb_triggered:
+            _cb_triggered = True
+            # Alerte admin (anti-spam : max 1 alerte / 5 min)
+            if time.time() - _cb_last_alert_ts > 300:
+                _cb_last_alert_ts = time.time()
+                try:
+                    tg_send(ADMIN_ID,
+                        "🔴 <b>CIRCUIT-BREAKER IA DÉCLENCHÉ</b>\n\n"
+                        "Les deux IA (Claude + Gemini) ont échoué <b>{}</b> fois de suite.\n"
+                        "Les signaux sont maintenant <b>BLOQUÉS</b> pour protéger le compte.\n\n"
+                        "⚡ Actions requises :\n"
+                        "1️⃣ Vérifier la clé <code>ANTHROPIC_API_KEY</code> sur console.anthropic.com\n"
+                        "2️⃣ Vérifier le quota <code>GEMINI_API_KEY</code> sur Google AI Studio\n\n"
+                        "🔄 Reset auto dans {}min si les IA répondent à nouveau.".format(
+                            _cb_failures, _CB_RESET_SEC // 60))
+                except Exception:
+                    pass
+            return True
+        return False
+
+
+def _cb_record_success():
+    """Enregistre un succès IA — remet le circuit-breaker à zéro."""
+    global _cb_failures, _cb_triggered
+    with _cb_lock:
+        _cb_failures  = 0
+        _cb_triggered = False
+
+
+def _cb_auto_reset():
+    """Reset silencieux si aucun échec depuis _CB_RESET_SEC secondes."""
+    global _cb_failures, _cb_triggered
+    with _cb_lock:
+        if _cb_triggered and time.time() - _cb_last_fail_ts > _CB_RESET_SEC:
+            _cb_failures  = 0
+            _cb_triggered = False
+            _LAI.info("Circuit-breaker IA : reset automatique après {}s sans échec".format(_CB_RESET_SEC))
+            try:
+                tg_send(ADMIN_ID,
+                    "🟢 <b>Circuit-breaker IA réinitialisé</b>\n"
+                    "Les signaux peuvent à nouveau passer si une IA répond.")
+            except Exception:
+                pass
 
 
 def _claude_session_risk(session: str) -> str:
@@ -521,17 +585,35 @@ def claude_validate_signal(sig: dict, session: str, htf_trend: str) -> dict:
     elapsed = round(time.time() - t0, 2)
 
     if not parsed:
-        _LAI.warning("Aucune IA n'a répondu — signal accepté par algo seul (v21 bypass)")
+        # ── Circuit-Breaker : bloquer au lieu de bypasser ─────────────
+        _cb_auto_reset()          # reset silencieux si timeout écoulé
+        triggered = _cb_record_failure()
+        if triggered:
+            _LAI.warning(
+                "CIRCUIT-BREAKER OUVERT — signal BLOQUÉ ({}x échec IA consécutif)".format(
+                    _cb_failures))
+            return {**fail,
+                    "validated"  : False,
+                    "verdict"    : "REJETER",
+                    "raison"     : "⛔ Circuit-breaker IA : Claude + Gemini indisponibles — signal bloqué par sécurité.",
+                    "final_score": 0.0,
+                    "ai_source"  : "none"}
+        # Sous le seuil : bypass toléré mais loggé explicitement
+        _LAI.warning(
+            "Aucune IA n'a répondu — bypass temporaire ({}/{} échecs)".format(
+                _cb_failures, _CB_THRESHOLD))
         algo_sc = float(sig.get("score", 0))
         return {**fail,
                 "validated"  : True,
                 "verdict"    : "VALIDER",
-                "raison"     : "IA indisponible — décision par algo seul",
+                "raison"     : "IA indisponible — décision par algo seul ({}/{} échecs)".format(
+                    _cb_failures, _CB_THRESHOLD),
                 "final_score": algo_sc,
                 "ai_source"  : "none"}
 
     # Champs retournés par le nouveau prompt fondamental
-    verdict      = parsed.get("verdict", "REJETER").upper()
+    # IA a répondu → réinitialiser le circuit-breaker
+    _cb_record_success()
     raison       = parsed.get("raison", "?")
     risque       = parsed.get("risque_principal", "?")
     timing_ok    = bool(parsed.get("timing_ok", False))
@@ -643,31 +725,7 @@ def fmt_ai_block(ai: dict) -> str:
     if sl_opt:
         lines.append("🛡️ <b>SL optimal IA :</b> <code>{}</code>".format(sl_opt))
     lines.append("━"*20)
-    return "\n".join(lines)
-
-    # Label dynamique selon la source IA utilisée
-    source = ai.get("ai_source", "claude").lower()
-    if source == "gemini":
-        ai_label = "GEMINI"
-    elif source == "both":
-        ai_label = "CLAUDE + GEMINI"
-    else:
-        ai_label = "CLAUDE"
-
-    return (
-        "\n━━━━━━━━━━━━━━━━━━━\n"
-        "🧠 <b>ANALYSE IA — {}</b>\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "{} <b>{}</b>\n\n"
-        "📊 Score IA    : <b>{}/10</b>  [{}]\n"
-        "📈 Probabilité : <b>{}%</b>\n"
-        "⭐ Score final : <b>{}/100</b>\n"
-        "⏱️ Timing      : {}\n\n"
-        "💡 <i>{}</i>\n\n"
-        "⚠️ Risque : <i>{}</i>\n"
-        "━━━━━━━━━━━━━━━━━━━"
-    ).format(ai_label, v_icon, verdict, ai_score, bar,
-             ai_proba, final_sc, timing, raison, risque)
+    return "\n".join(lines)  # ✅ FIX : code mort supprimé (ancien bloc v19 inaccessible)
 
 
 # ══════════════════════════════════════════════════════
@@ -848,7 +906,7 @@ except ImportError:
 
 PRO_PRICE  = 10;  REF_TARGET = 30;  REF_MONTHS = 3
 FREE_LIMIT = 3;   PRO_LIMIT  = 10;  NB_AGENTS  = 20
-TRIAL_DAYS = 3;   SCAN_SEC   = 60;  DATA_MAX_AGE = 120
+TRIAL_DAYS = 3;   SCAN_SEC   = 60;  DATA_MAX_AGE = 120  # ✅ 60s évite surcharge + rate-limit Yahoo
 DAILY_HOUR = 22;  WEEKLY_DAY = 6;   WEEKLY_HOUR = 21
 SIGNAL_CUTOFF_HOUR = 22   # Aucun signal envoyé à partir de 22h00 UTC
 FEE_TAKER  = 0.0004
@@ -858,9 +916,9 @@ FLOOR_USD  = 2.0; DD_LIMIT = 0.35
 AM_MULT    = 1.30; AM_MAX = 4
 
 # ── Throttle signaux ────────────────────────────────────────────
-MAX_SIG_PER_HOUR  = 2   # max 2 signaux par heure glissante
-MAX_SIG_PER_DAY   = 15  # max global par jour
-MIN_GAP_BETWEEN   = 15  # minutes minimum entre 2 signaux consécutifs
+MAX_SIG_PER_HOUR  = 1   # strict : 1 seul signal par heure glissante
+MAX_SIG_PER_DAY   = 10  # max global par jour (PRO: limité par PRO_LIMIT)
+MIN_GAP_BETWEEN   = 30  # minutes minimum entre 2 signaux consécutifs
 
 MARKETS = [
     {"sym":"GC=F",     "name":"XAUUSD","cat":"METALS","pip":0.01,  "max_sp":70,"vol":5,"crypto":False},
@@ -2011,237 +2069,6 @@ def pat_order_flow_shift(c, bias):
             return avg_bear > avg_bull * 1.5
     return False
 
-
-# ══════════════════════════════════════════════════════
-#  🕯️ PATTERNS BOUGIES JAPONAISES — M15 / H1 / H4
-#  Marteau, Étoile filante, Doji, Englobante, Harami...
-# ══════════════════════════════════════════════════════
-
-def pat_hammer(c, bias):
-    """
-    Marteau (Hammer) / Marteau inversé :
-    - Marteau BULLISH : petite corps en haut, longue mèche basse (≥2×corps)
-    - Étoile filante BEARISH : petite corps en bas, longue mèche haute (≥2×corps)
-    Signal de retournement fort sur support/résistance.
-    """
-    if len(c) < 3: return False
-    last = c[-1]
-    body  = abs(last["c"] - last["o"])
-    rng   = last["h"] - last["l"]
-    if rng == 0 or body == 0: return False
-    lower_wick = min(last["o"], last["c"]) - last["l"]
-    upper_wick = last["h"] - max(last["o"], last["c"])
-    if bias == "BULLISH":
-        return lower_wick >= body * 2.0 and upper_wick <= body * 0.5 and body / rng < 0.4
-    else:
-        return upper_wick >= body * 2.0 and lower_wick <= body * 0.5 and body / rng < 0.4
-
-
-def pat_shooting_star(c, bias):
-    """Étoile filante — alias sémantique pour le marteau inversé bearish."""
-    return pat_hammer(c, bias)
-
-
-def pat_doji(c, bias):
-    """
-    Doji d'indécision :
-    - Corps très petit (< 10% du range)
-    - Indique hésitation → retournement si en zone clé
-    Valide pour BUY ou SELL selon le contexte.
-    """
-    if len(c) < 3: return False
-    last = c[-1]
-    body = abs(last["c"] - last["o"])
-    rng  = last["h"] - last["l"]
-    if rng == 0: return False
-    return body / rng < 0.10
-
-
-def pat_engulfing(c, bias):
-    """
-    Bougie englobante (Engulfing) :
-    - BULLISH : bougie verte qui englobe entièrement la précédente rouge
-    - BEARISH : bougie rouge qui englobe entièrement la précédente verte
-    Un des signaux les plus fiables en analyse technique.
-    """
-    if len(c) < 2: return False
-    last = c[-1]; prev = c[-2]
-    if bias == "BULLISH":
-        return (last["c"] > last["o"] and prev["c"] < prev["o"]
-                and last["c"] > prev["o"] and last["o"] < prev["c"])
-    else:
-        return (last["c"] < last["o"] and prev["c"] > prev["o"]
-                and last["c"] < prev["o"] and last["o"] > prev["c"])
-
-
-def pat_harami(c, bias):
-    """
-    Harami (bébé dans le ventre) :
-    - Petite bougie entièrement contenue dans le corps de la précédente
-    - Signal d'indécision → retournement potentiel
-    """
-    if len(c) < 2: return False
-    last = c[-1]; prev = c[-2]
-    prev_top = max(prev["o"], prev["c"])
-    prev_bot = min(prev["o"], prev["c"])
-    last_top = max(last["o"], last["c"])
-    last_bot = min(last["o"], last["c"])
-    contained = last_top <= prev_top and last_bot >= prev_bot
-    if bias == "BULLISH":
-        return contained and prev["c"] < prev["o"] and last["c"] > last["o"]
-    else:
-        return contained and prev["c"] > prev["o"] and last["c"] < last["o"]
-
-
-def pat_morning_evening_star(c, bias):
-    """
-    Morning Star (bullish) / Evening Star (bearish) :
-    3 bougies : grande bougie directionnelle + petit doji/corps + bougie inverse forte
-    Signal de retournement majeur — très fiable sur H1/H4.
-    """
-    if len(c) < 3: return False
-    c1, c2, c3 = c[-3], c[-2], c[-1]
-    body1 = abs(c1["c"] - c1["o"])
-    body2 = abs(c2["c"] - c2["o"])
-    body3 = abs(c3["c"] - c3["o"])
-    if body1 == 0: return False
-    if bias == "BULLISH":
-        # Morning Star : grande rouge + petit corps + grande verte
-        return (c1["c"] < c1["o"] and body1 > 0
-                and body2 < body1 * 0.4
-                and c3["c"] > c3["o"] and body3 > body1 * 0.5
-                and c3["c"] > (c1["o"] + c1["c"]) / 2)
-    else:
-        # Evening Star : grande verte + petit corps + grande rouge
-        return (c1["c"] > c1["o"] and body1 > 0
-                and body2 < body1 * 0.4
-                and c3["c"] < c3["o"] and body3 > body1 * 0.5
-                and c3["c"] < (c1["o"] + c1["c"]) / 2)
-
-
-def pat_three_white_soldiers_crows(c, bias):
-    """
-    3 Soldats Blancs (bullish) / 3 Corbeaux Noirs (bearish) :
-    3 bougies consécutives dans la même direction, chacune clôturant plus haut/bas
-    Signal de momentum fort — continuation quasi certaine.
-    """
-    if len(c) < 3: return False
-    c1, c2, c3 = c[-3], c[-2], c[-1]
-    if bias == "BULLISH":
-        return (c1["c"] > c1["o"] and c2["c"] > c2["o"] and c3["c"] > c3["o"]
-                and c2["c"] > c1["c"] and c3["c"] > c2["c"]
-                and c2["o"] > c1["o"] and c3["o"] > c2["o"])
-    else:
-        return (c1["c"] < c1["o"] and c2["c"] < c2["o"] and c3["c"] < c3["o"]
-                and c2["c"] < c1["c"] and c3["c"] < c2["c"]
-                and c2["o"] < c1["o"] and c3["o"] < c2["o"])
-
-
-def pat_pin_bar(c, bias):
-    """
-    Pin Bar (rejet de niveau) :
-    Mèche très longue (≥3×corps) dans la direction opposée + petite corps en extrémité
-    Indique rejet violent d'un niveau de prix — très utilisé en Price Action.
-    """
-    if len(c) < 2: return False
-    last = c[-1]
-    body  = abs(last["c"] - last["o"])
-    rng   = last["h"] - last["l"]
-    if rng == 0 or body < 0.00001: return False
-    lower_wick = min(last["o"], last["c"]) - last["l"]
-    upper_wick = last["h"] - max(last["o"], last["c"])
-    if bias == "BULLISH":
-        return lower_wick >= body * 3.0 and lower_wick > upper_wick * 2
-    else:
-        return upper_wick >= body * 3.0 and upper_wick > lower_wick * 2
-
-
-def scan_patterns_multitf(sym, bias):
-    """
-    Scanne les patterns bougies japonaises + SMC sur M15, H1, H4.
-    Retourne (score_total, badges_list, détails par TF).
-    """
-    results = {}
-    score = 0
-    badges = []
-
-    tf_configs = [
-        ("15m", "10d",  "M15", 1.0),   # poids normal
-        ("1h",  "30d",  "H1",  1.4),   # poids plus fort
-        ("4h",  "60d",  "H4",  1.8),   # poids le plus fort
-    ]
-
-    for interval, period, tf_label, weight in tf_configs:
-        c = fetch_c(sym, interval, period)
-        if not c or len(c) < 5:
-            continue
-
-        tf_score = 0
-        tf_badges = []
-
-        # Bougies japonaises
-        if pat_hammer(c, bias):
-            pts = int(14 * weight)
-            tf_score += pts
-            tf_badges.append("{}-{}".format(tf_label, "Marteau ✓" if bias=="BULLISH" else "Étoile ✓"))
-
-        if pat_engulfing(c, bias):
-            pts = int(18 * weight)
-            tf_score += pts
-            tf_badges.append("{}-Engulf ✓".format(tf_label))
-
-        if pat_morning_evening_star(c, bias):
-            pts = int(20 * weight)
-            tf_score += pts
-            tf_badges.append("{}-{}".format(tf_label, "MornStar ✓" if bias=="BULLISH" else "EveStar ✓"))
-
-        if pat_three_white_soldiers_crows(c, bias):
-            pts = int(16 * weight)
-            tf_score += pts
-            tf_badges.append("{}-{}".format(tf_label, "3Sol ✓" if bias=="BULLISH" else "3Corb ✓"))
-
-        if pat_pin_bar(c, bias):
-            pts = int(15 * weight)
-            tf_score += pts
-            tf_badges.append("{}-PinBar ✓".format(tf_label))
-
-        if pat_harami(c, bias):
-            pts = int(10 * weight)
-            tf_score += pts
-            tf_badges.append("{}-Harami ✓".format(tf_label))
-
-        if pat_doji(c, bias) and len(c) >= 3:
-            # Doji valide seulement si suivi d'une bougie dans le bon sens
-            next_c = c[-1]
-            if (bias == "BULLISH" and next_c["c"] > next_c["o"]) or                (bias == "BEARISH" and next_c["c"] < next_c["o"]):
-                pts = int(8 * weight)
-                tf_score += pts
-                tf_badges.append("{}-Doji ✓".format(tf_label))
-
-        # SMC sur H1/H4 aussi
-        if tf_label in ("H1", "H4"):
-            bos_ok, bos_lbl = pat_bos_choch_confirm(c, bias)
-            if bos_ok:
-                pts = int(22 * weight)
-                tf_score += pts
-                tf_badges.append("{}-{} ✓".format(tf_label, bos_lbl.replace(" ✓","")))
-
-            if pat_mitigation_block(c, bias):
-                pts = int(16 * weight)
-                tf_score += pts
-                tf_badges.append("{}-Mitigation ✓".format(tf_label))
-
-            if pat_inducement(c, bias):
-                pts = int(18 * weight)
-                tf_score += pts
-                tf_badges.append("{}-IDM ✓".format(tf_label))
-
-        score += tf_score
-        badges.extend(tf_badges)
-        results[tf_label] = {"score": tf_score, "badges": tf_badges}
-
-    return min(score, 120), badges, results
-
 def pattern_score_m5(c, bias):
     """
     Calcule le bonus de score total des patterns M5 + SMC avancés.
@@ -2557,12 +2384,7 @@ def agent_analyze(m, score_min, news_ok, q):
         mode   = get_trade_mode(m)
         rr_min = 2.0   # FIX v21 : RR 2.0 fixe (3.0 était trop restrictif)
 
-        # ── Filtre session : pas de signaux en session asiatique ni OFF ──
-        if sn in ("ASIAN", "OFF"):
-            q.put({"name": m["name"], "cat": m["cat"], "found": False,
-                   "reason": "Session inactive ({}) — pas de signaux 0h-7h UTC".format(sn), "improv": False})
-            return
-        # Forex uniquement pendant sessions actives
+        # ── Filtre session FOREX ──────────────────────────────────
         if m["cat"] == "FOREX" and sn not in ("LONDON_KZ", "OVERLAP", "NY", "LONDON"):
             q.put({"name": m["name"], "cat": m["cat"], "found": False,
                    "reason": "Session FOREX inactive ({})".format(sn), "improv": False})
@@ -2709,16 +2531,9 @@ def agent_analyze(m, score_min, news_ok, q):
             m5_raw = None  # pas de données M5
 
         # ── Patterns M5 (visuels — bonus score) ──────────────────
-        # ── Patterns M5 classiques ──────────────────────────────────
         pat_bonus, pat_badges = pattern_score_m5(m5_raw, b) if m5_raw else (0, [])
         if pat_bonus > 0:
             sc = min(sc + pat_bonus, 115)
-
-        # ── Patterns multi-TF : M15 + H1 + H4 bougies japonaises + SMC ──
-        mtf_bonus, mtf_badges, mtf_details = scan_patterns_multitf(m["sym"], b)
-        if mtf_bonus > 0:
-            sc = min(sc + mtf_bonus, 115)
-            pat_badges = pat_badges + mtf_badges
 
         # ── M1 : TF d'entrée principal (remplace bonus optionnel) ──
         m1 = fetch_c(m["sym"], "1m", "2d")
@@ -2866,8 +2681,6 @@ def agent_analyze(m, score_min, news_ok, q):
                             "entry": f(e), "tp": f(tp), "sl": f(sl_p), "rr": rr,
                             "score": sc, "score_min": s_min, "atr": f(a), "sp": sp,
                             "bias": b, "btype": bt,
-                            "bb_bot": f(bb["bottom"]) if bbs else "—",
-                            "bb_top": f(bb["top"]) if bbs else "—",
                             "g001": round(ptp * 0.01, 2), "g01": round(ptp * 0.1, 2),
                             "g1": round(ptp, 2),
                             "l001": round(psl * 0.01, 2), "l01": round(psl * 0.1, 2),
@@ -2909,8 +2722,6 @@ def agent_analyze(m, score_min, news_ok, q):
                             "entry": f(e), "tp": f(tp), "sl": f(sl_p), "rr": rr,
                             "score": sc, "score_min": s_min, "atr": f(a), "sp": sp,
                             "bias": b, "btype": bt,
-                            "bb_bot": f(bb["bottom"]) if bbs else "—",
-                            "bb_top": f(bb["top"]) if bbs else "—",
                             "g001": round(ptp * 0.01, 2), "g01": round(ptp * 0.1, 2),
                             "g1": round(ptp, 2),
                             "l001": round(psl * 0.01, 2), "l01": round(psl * 0.1, 2),
@@ -5173,11 +4984,7 @@ def _scan_and_send_inner():
                 for r in results if r["found"]]
     with _sent_lock:
         sigs_raw = [(s, k) for s, k in sigs_raw if k not in _sent]
-    # Trier par score décroissant — les meilleurs signaux passent en premier
     sigs_raw.sort(key=lambda x: -x[0]["score"])
-    # Limiter à 3 signaux max par cycle de scan pour ne pas spammer
-    MAX_PER_CYCLE = 2
-    sigs_raw = sigs_raw[:MAX_PER_CYCLE]
 
     # ── ✨ Validation Dual-AI (Claude/Gemini) — Risk Manager ────────────
     # Pipeline : Algo (analyste) → IA (validateur) → Script (juge)
@@ -6086,7 +5893,7 @@ def fmt_signal_pro(s, news, sl):
         entry=s["entry"], tp=s["tp"], sl_v=s["sl"], rr=s["rr"],
         g001=s["g001"], l001=s["l001"], g01=s["g01"], l01=s["l01"],
         g1=s["g1"], l1=s["l1"], bias=s["bias"], btype_fr=btype_fr,
-        bb_bot=s.get("bb_bot", "—"), bb_top=s.get("bb_top", "—"),
+        bb_bot=s["bb_bot"], bb_top=s["bb_top"],
         score=s["score"], score_min=s.get("score_min", "?"), bar=bar, atr=s["atr"],
         news_s="\u2705 Pas de news" if news_ok else "\u26a0\ufe0f News actif",
         sp_s="\u2705 Spread OK" if sp_ok else "\u26a0\ufe0f Spread large",
@@ -6261,19 +6068,13 @@ def handle_debug(uid):
         found     = [r for r in results if r.get("found")]
         not_found = [r for r in results if not r.get("found")]
         if found:
-            lines.append("✅ <b>SIGNAUX DÉTECTÉS ({}):</b>".format(len(found)))
+            lines.append("\u2705 <b>SIGNAUX ({}):</b>".format(len(found)))
             for r in found:
                 s = r["signal"]
-                arrow = "⬆️" if s["side"] == "BUY" else "⬇️"
-                sf = "ACHAT" if s["side"] == "BUY" else "VENTE"
-                lines.append("  🟢 <b>{}</b> {} {}  RR 1:{}  Score {}/100".format(
-                    r["name"], arrow, sf, s["rr"], s["score"]))
-                lines.append("    📍 Entrée : <code>{}</code>  TP : <code>{}</code>  SL : <code>{}</code>".format(
-                    s.get("entry","?"), s.get("tp","?"), s.get("sl","?")))
-                badges_short = (s.get("badges","") or "—")[:70]
-                lines.append("    🏷 {}".format(badges_short))
+                lines.append("  \U0001f7e2 {} {} RR 1:{} Score {}".format(
+                    r["name"], s["side"], s["rr"], s["score"]))
             lines.append("")
-        lines.append("⚪ <b>REJETÉS ({}):</b>".format(len(not_found)))
+        lines.append("\u26aa <b>REJETÉS ({}):</b>".format(len(not_found)))
         reasons = {}
         for r in not_found:
             reason = r.get("reason", "?")
@@ -9173,6 +8974,7 @@ def main():
             ai_status = ("✅ Claude+Gemini" if CLAUDE_API_KEY and GEMINI_API_KEY else
                          "✅ Claude" if CLAUDE_API_KEY else
                          "✅ Gemini" if GEMINI_API_KEY else "⚠️ Sans IA")
+            cb_status = "🟢 Actif (seuil: {}x)".format(_CB_THRESHOLD)
             tg_send(ADMIN_ID,
                 "🤖 <b>AlphaBot PRO v21 — EN LIGNE !</b>\n\n"
                 "✅ DB initialisée\n"
@@ -9180,13 +8982,17 @@ def main():
                 "✅ Webhook configuré\n"
                 "⚡ Scan toutes les <b>{}s</b> — signaux directs\n\n"
                 "🕐 Session : <b>{}</b>  Score min : <b>{}</b>\n"
-                "🌍 Régime IA : <b>{}</b>\n\n"
+                "🌍 Régime IA : <b>{}</b>\n"
+                "🔌 IA : <b>{}</b>\n"
+                "🛡 Circuit-breaker : <b>{}</b>\n\n"
                 "📡 FREE {}/j  ·  PRO {}/j\n"
                 "🛠 /admin pour le panel".format(
                     port,
                     SCAN_SEC,
                     sl_l, sm_real,
                     AI_REG.get("regime", "Init"),
+                    ai_status,
+                    cb_status,
                     FREE_LIMIT, PRO_LIMIT),
                 kb=kb_main(False))
         threading.Thread(target=_init_bg, daemon=True).start()
@@ -9253,4 +9059,5 @@ def main():
 
 if __name__=="__main__":
     main()
+
 
