@@ -2721,7 +2721,7 @@ def ai_open(setup):
 
 def ai_check():
     """Challenge IA désactivé — fonction conservée pour compatibilité."""
-    pass
+    return
     ch = chal_get()
     for t in trades:
         if t["status"] != "open": continue
@@ -8759,5 +8759,4 @@ def main():
 
 if __name__=="__main__":
     main()
-
 
