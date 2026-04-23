@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 AlphaBot PRO v20 — Agent IA Adaptatif + Validateur Dual-AI + Challenge IA
@@ -43,7 +42,7 @@ except ImportError:
 # ══════════════════════════════════════════════════════
 #  CONFIG
 # ══════════════════════════════════════════════════════
-TG_TOKEN     = os.getenv("TG_TOKEN",  "6950706659:AAGXw-27ebhWLm2HfG7lzC7EckpwCPS_JFg")
+TG_TOKEN     = os.getenv("TG_TOKEN")
 BOT_USER     = "leaderodg_bot"
 CHANNEL_ID   = os.getenv("TG_GROUP", "-1003757467015")
 VIP_CH       = os.getenv("TG_VIP",   "-1003771736496")
@@ -60,7 +59,7 @@ VIP_GROUP_LINK  = os.getenv("VIP_GROUP_LINK",  "https://t.me/+alphabotvip")    #
 # ══════════════════════════════════════════════════════════════════════
 #  MODULE CLAUDE AI — VALIDATEUR EXPERT ICT/SMC
 # ══════════════════════════════════════════════════════════════════════
-CLAUDE_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "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")
+CLAUDE_API_KEY   = os.getenv("ANTHROPIC_API_KEY")
 CLAUDE_MODEL     = "claude-sonnet-4-5-20250514"   # ✨ Sonnet — meilleure qualité d'analyse
 CLAUDE_TOKENS    = 600
 GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "")  # Optionnel — fallback auto
@@ -217,7 +216,7 @@ Score algo  : {score}/100 (seuil min : 58)
 Biais HTF   : {htf}
 Stratégie   : {mode}
 Badges      : {badges}
-RR minimum  : 2.0 requis — actuel : 1:{rr}
+RR minimum  : 3.0 requis — actuel : 1:{rr}
 
 ══ 2. FONDAMENTAUX ════════════════════════════════════
 Paire       : {base_cur} / {quote_cur}
@@ -246,7 +245,7 @@ Vérifie ces 6 confirmations :
   3. FVG M15 actif dans la direction ?
   4. Confirmation M5 alignée ? (biais + structure LTF)
   5. Entrée sur zone OTE / discount (BUY) ou premium (SELL) ?
-  6. RR ≥ 2.0 réel calculé sur ce setup ?
+  6. RR ≥ 3.0 réel calculé sur ce setup ?
 
 ══ ANALYSE FONDAMENTALE DÉTAILLÉE ════════════════════
   A. Quelle devise est la plus forte fondamentalement ?
@@ -257,7 +256,7 @@ Vérifie ces 6 confirmations :
 ══ RÈGLE DE VALIDATION ════════════════════════════════
 VALIDER si :
   ✅ Score algo ≥ 65/100
-  ✅ RR ≥ 2.0
+  ✅ RR ≥ 3.0
   ✅ Biais HTF aligné (H1 + M15 cohérents)
   ✅ Fondamentaux ALIGNE ou NEUTRE (jamais CONTRE)
   ✅ Aucune news BLOQUANTE dans les 2h
@@ -871,7 +870,7 @@ PAIR_MAX_LEV = {"BTCUSDT":125,"ETHUSDT":100,"SOLUSDT":50,"BNBUSDT":75,"XRPUSDT":
 # ══════════════════════════════════════════════════════
 
 # ══ MARCHÉS SCALP PRIORITAIRES (toute la semaine) ═══════════════
-# Gold/Silver/BTC = scalp permanent — RR min 2.0 — priorité maximale
+# Gold/Silver/BTC = scalp permanent — RR min 3.0 — priorité maximale
 SCALP_PRIORITY_MARKETS = {"XAUUSD", "XAGUSD", "BTCUSD"}
 
 # Priorité par paire (bonus score)
@@ -895,7 +894,7 @@ MARKET_PRIORITY = {
 def get_trade_mode(m):
     """
     Retourne le mode de trading :
-    - SCALP  → Gold/Silver/BTC (toute la semaine) — RR min 2.0, M5
+    - SCALP  → Gold/Silver/BTC (toute la semaine) — RR min 3.0, M5
     - NORMAL → Forex + Indices — RR ≥ 3.0
     """
     if m["name"] in SCALP_PRIORITY_MARKETS:
@@ -2073,7 +2072,7 @@ def agent_analyze(m, score_min, news_ok, q):
     try:
         sn, _, _, _ = get_session()
         mode   = get_trade_mode(m)
-        rr_min = 2.0   # FIX v21 : RR 2.0 fixe (3.0 était trop restrictif)
+        rr_min = 2.0   # RR minimum réaliste — TP reste à risk×3 mais seuil 2.0 après spread
 
         # ── Filtre session FOREX ──────────────────────────────────
         if m["cat"] == "FOREX" and sn not in ("LONDON_KZ", "OVERLAP", "NY", "LONDON"):
@@ -2301,9 +2300,11 @@ def agent_analyze(m, score_min, news_ok, q):
                 displ_str = displ_str_m5
                 sc = min(sc + 5, 115)
 
-        # ── Construction signal — OB M15 obligatoire ─────────────
-        if bbs and sc >= s_min and (news_ok or sc >= s_min + 5):
-            bb   = bbs[0]
+        # ── Construction signal — OB M15 OU FVG OU OTE (v69-2 : non bloquant)
+        # bbs obligatoire retiré → FVG ou OTE suffisent si score ok
+        _has_confluence = bool(bbs) or bool(fvg_z) or in_ote
+        if _has_confluence and sc >= s_min and (news_ok or sc >= s_min + 5):
+            bb   = bbs[0] if bbs else None
 
             # ── Entrée optimisée : OTE 70.5% quand possible ─────
             if in_ote and ote_lo and ote_hi:
@@ -2435,10 +2436,10 @@ def agent_analyze(m, score_min, news_ok, q):
             q.put({"name": m["name"], "cat": m["cat"], "found": True,
                    "signal": sig, "improv": False})
         else:
-            if bbs and sc >= s_min:
+            if _has_confluence and sc >= s_min:
                 reason = "RR<{:.1f}".format(rr_min)
-            elif not bbs:
-                reason = "No OB M15"
+            elif not _has_confluence:
+                reason = "No confluence (OB/FVG/OTE)"
             elif not m5_conf["ok"]:
                 reason = "M5 non aligné ({})".format(m5_conf["details"])
             elif not displ_ok:
@@ -2917,7 +2918,7 @@ def fmt_pro(s, news, sl_label):
         high_proba = sc >= 80 or ai_proba >= 65
         lines += [
             "┌─ <b>⚡ MODE SCALP — {} {}</b> ─────────".format(s["name"], sf),
-            "│  RR minimum : <b>2.0</b>  ·  TF entrée : M5/M15",
+            "│  RR minimum : <b>3.0</b>  ·  TF entrée : M5/M15",
         ]
         if high_proba:
             lines += [
@@ -3412,7 +3413,7 @@ def _scan_inner():
     if _GEMINI_OK and GEMINI_API_KEY and sigs:
         sigs_gemini = []
         for sig, key in sigs:
-            if sig.get("rr", 0) >= 2.0 and sig.get("score", 0) >= sm:
+            if sig.get("rr", 0) >= 3.0 and sig.get("score", 0) >= sm:
                 gem = gemini_scan_signal(sig, sn)
                 sig["gemini_scan"] = gem
                 if gem["approved"]:
@@ -3430,7 +3431,7 @@ def _scan_inner():
     if CLAUDE_API_KEY and sigs:
         sigs_validated = []
         for sig, key in sigs:
-            if sig.get("rr", 0) >= 2.0 and sig.get("score", 0) >= sm:
+            if sig.get("rr", 0) >= 3.0 and sig.get("score", 0) >= sm:
                 htf_trend = sig.get("bias", "BULLISH")
                 ai_result = claude_validate_signal(sig, sn, htf_trend)
                 sig["ai_result"] = ai_result
@@ -3654,12 +3655,11 @@ def ai_scan_cycle():
 def broadcast_new_version():
     """Envoie un message de mise à jour à TOUS les utilisateurs avec leur lien de parrainage."""
     time.sleep(8)
-    users_data = db_all("SELECT uid FROM users")
+    users_data = db_all("SELECT user_id FROM users")
     count = ok = fail = 0
     for row in users_data:
-        fuid = row["uid"] if isinstance(row, dict) else row[0]
+        fuid = row["user_id"] if isinstance(row, dict) else row[0]
         if not fuid: continue
-        if True:
         try:
             ref_link = "https://t.me/{}?start={}".format(BOT_USER, fuid)
             msg = (
@@ -4692,7 +4692,7 @@ def _scan_and_send_inner():
     if CLAUDE_API_KEY or GEMINI_API_KEY:
         sigs_validated_ai = []
         for sig, key in sigs_raw:
-            if sig.get("rr", 0) >= 2.0 and sig.get("score", 0) >= sm:
+            if sig.get("rr", 0) >= 3.0 and sig.get("score", 0) >= sm:
                 htf_trend  = sig.get("bias", "BULLISH")
                 ai_result  = claude_validate_signal(sig, sn, htf_trend)
                 sig["ai_result"] = ai_result
@@ -6281,10 +6281,10 @@ def get_adaptive_score_min():
         "CRISIS":        +5,
     }.get(reg, 0)
 
-    final = 70 + session_adj + regime_adj
-    log("INFO", clr("Score min v21: {} (base:70 sess:{:+d} regime:{:+d})".format(
+    final = 65 + session_adj + regime_adj
+    log("INFO", clr("Score min v21: {} (base:65 sess:{:+d} regime:{:+d})".format(
         final, session_adj, regime_adj), "d"))
-    return max(65, min(78, final))  # plancher 65, plafond 78
+    return max(60, min(75, final))  # plancher 60, plafond 75
 
 
 
@@ -8759,4 +8759,5 @@ def main():
 
 if __name__=="__main__":
     main()
+
 
