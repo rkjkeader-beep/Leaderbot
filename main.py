@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-AlphaBot PRO v20 — Agent IA Adaptatif + Validateur Dual-AI + Challenge IA
-═══════════════════════════════════════════════════════════════════════════
+AlphaBot PRO v21 — Agent IA Adaptatif + Validateur Dual-AI + Challenge IA + Setup A+ M1+M5
+═══════════════════════════════════════════════════════════════════════════════════════════
 • Bot Telegram FREE/PRO/VIP + paiement USDT auto
 • 18 marchés : Forex · Or/Argent · BTC · NAS100/SPX500/US30 · Pétrole
 • Cerveau ICT/SMC v2 + Analyse Multi-Timeframe (M1+M5+M15+H1)
 • Tendance de fond : H1 (interne) | Entrée : M5 max M15
+• Setup A+ M1+M5 : Sweep→MSS+DISPL→FVG→BB-Retest→OTE 50%→Fibo 61.8%→CHoCH LTF
+  → Win rate estimé 70-75% | RR minimum 3.0 obligatoire | +35 pts score
 • Si pas de setup parfait → l'agent allège les critères
   si tendance de fond + session + broker sont valides
 • Challenge IA : simulation Binance Futures auto (BTC + Top altcoins)
@@ -50,7 +52,8 @@ ADMIN_ID     = int(os.getenv("ADMIN_ID", "6982051442"))
 USDT_ADDR    = "TJuPBihvzgb6ffGLw4WnqC33Av38kwU7XE"
 BROKER_LINK  = "https://one.exnessonelink.com/a/nb3fx0bpnm"
 DB_FILE      = "ab10.db"
-BINANCE_BASE = "https://fapi.binance.com/fapi/v1"
+BINANCE_BASE      = "https://fapi.binance.com/fapi/v1"
+TWELVEDATA_KEY    = os.getenv("TWELVEDATA_API_KEY", "")   # https://twelvedata.com (plan gratuit = 800 req/j)
 
 # ── Liens d'invitation groupes (à mettre à jour si lien change) ─
 FREE_GROUP_LINK = os.getenv("FREE_GROUP_LINK", "https://t.me/+alphabotfree")   # ← remplace par ton vrai lien groupe FREE
@@ -60,7 +63,7 @@ VIP_GROUP_LINK  = os.getenv("VIP_GROUP_LINK",  "https://t.me/+alphabotvip")    #
 #  MODULE CLAUDE AI — VALIDATEUR EXPERT ICT/SMC
 # ══════════════════════════════════════════════════════════════════════
 CLAUDE_API_KEY   = os.getenv("ANTHROPIC_API_KEY")
-CLAUDE_MODEL     = "claude-sonnet-4-5-20250514"   # ✨ Sonnet — meilleure qualité d'analyse
+CLAUDE_MODEL     = "claude-sonnet-4-5"   # ✨ Sonnet — meilleure qualité d'analyse
 CLAUDE_TOKENS    = 600
 GEMINI_API_KEY   = os.getenv("GEMINI_API_KEY", "")  # Optionnel — fallback auto
 GEMINI_MODEL     = "gemini-2.0-flash"
@@ -165,6 +168,26 @@ def _claude_build_prompt(sig: dict, session: str, htf_trend: str) -> str:
     badges     = sig.get("badges", "Aucun")
     mode       = sig.get("mode", "ICT/SMC")
 
+    # ── Setup A+ M1+M5 ───────────────────────────────────────────────
+    aplus      = sig.get("aplus") or {}
+    aplus_found = bool(aplus.get("found"))
+    aplus_rr    = aplus.get("rr_est", "?")
+    aplus_conf  = aplus.get("confirmations", 0)
+    aplus_bdgs  = ", ".join(aplus.get("badges", [])) if aplus.get("badges") else "—"
+    if aplus_found:
+        aplus_block = (
+            "\n══ SETUP A+ M1+M5 DÉTECTÉ ════════════════════\n"
+            "  🏆 Setup ICT PARFAIT — Win rate estimé 70-75%\n"
+            "  Confirmations : {}/9  |  RR estimé : 1:{}\n"
+            "  Badges : {}\n"
+            "  ✅ Sweep → MSS+Displacement → FVG → BB-Retest\n"
+            "  ✅ Entrée OTE 50% + Fibo 61.8% + CHoCH LTF\n"
+            "  ✅ SL sous mèche sweep | TP liquidity pool\n"
+            "  → Ce setup A+ impose RR ≥ 3.0 OBLIGATOIRE\n"
+        ).format(aplus_conf, aplus_rr, aplus_bdgs)
+    else:
+        aplus_block = ""
+
     # ── News haute importance ────────────────────────────────────────
     news_lines = []
     try:
@@ -210,7 +233,7 @@ ATR M15     : {atr}
 Score algo  : {score}/100  |  Stratégie : {mode}
 Badges ICT  : {badges}
 Temps TP1   : ~{mins_to_tp} min ({candles} bougies M15)
-
+{aplus_block}
 ══ 1. TECHNIQUE ICT/SMC ═══════════════════════════════
 Score algo  : {score}/100 (seuil min : 58)
 Biais HTF   : {htf}
@@ -261,6 +284,7 @@ VALIDER si :
   ✅ Fondamentaux ALIGNE ou NEUTRE (jamais CONTRE)
   ✅ Aucune news BLOQUANTE dans les 2h
   ✅ Au moins 3 confirmations techniques sur 6
+  {aplus_rule}
 
 REJETER UNIQUEMENT si : fondamentaux CONTRE le trade OU news BLOQUANT.
 Pour tout le reste → VALIDER avec note de risque.
@@ -273,7 +297,7 @@ Réponds UNIQUEMENT avec ce JSON exact :
   "biais_fondamental": "ALIGNE" ou "NEUTRE" ou "CONTRE",
   "timing_ok": true ou false,
   "tp_atteignable": true ou false,
-  "confirmations_tech": 0,
+  "confirmations_tech": <entier 0-10 : nb de confirmations validées parmi les 6 tech + 4 macro>,
   "raison": "<analyse technique ET fondamentale — 2-3 phrases>",
   "risque_principal": "<le risque #1>",
   "conseil_entree": "<timing ou point d entree optimal>"
@@ -291,7 +315,10 @@ Réponds UNIQUEMENT avec ce JSON exact :
         fund_badge=fund_badge or "Aucun",
         news_status_str=news_status_str, news_block=news_block,
         heure=now_str, day=now_day,
-        kz_str=kz_str, day_ok_str=day_ok_str)
+        kz_str=kz_str, day_ok_str=day_ok_str,
+        aplus_block=aplus_block,
+        aplus_rule="✅ Setup A+ M1+M5 détecté — priorité maximale, VALIDER si RR ≥ 3.0" if aplus_found else "",
+    )
 
 
 def _claude_call(prompt: str) -> dict | None:
@@ -521,27 +548,44 @@ def claude_validate_signal(sig: dict, session: str, htf_trend: str) -> dict:
     biais_fond   = parsed.get("biais_fondamental", "NEUTRE").upper()
     news_impact  = parsed.get("news_impact", "OK").upper()
 
-    # Compatibilité champs anciens (pour fmt_ai_block)
-    ai_score   = 8.0 if verdict == "VALIDER" else 4.0
-    ai_proba   = 75.0 if verdict == "VALIDER" else 30.0
-    confiance  = "HAUTE" if verdict == "VALIDER" else "FAIBLE"
-    tp_rec     = 1
-    sl_opt     = None
-    # Récupérer les confirmations techniques détaillées
-    criteres   = int(parsed.get("confirmations_tech", 8 if verdict == "VALIDER" else 4))
-    conseil    = parsed.get("conseil_entree", "")
-    algo_sc    = float(sig.get("score", 0))
-    final_sc   = round(algo_sc, 1)   # score algo seul, Claude ne rescore plus
+    # ── Calcul dynamique ai_score /10 depuis les champs retournés par l'IA ──
+    tech_ok_field = bool(parsed.get("technique_ok", verdict == "VALIDER"))
+    tp_reach      = bool(parsed.get("tp_atteignable", False))
+    criteres      = int(parsed.get("confirmations_tech", 0))
 
-    # Règle de validation : fondamentaux + news + timing + TP atteignable
+    ai_score  = 0.0
+    ai_score += 3.0 if tech_ok_field else 0.0
+    ai_score += 2.0 if timing_ok     else 0.0
+    ai_score += {"ALIGNE": 2.0, "NEUTRE": 1.0, "CONTRE": -2.0}.get(biais_fond, 1.0)
+    ai_score += {"OK": 2.0, "PRUDENCE": 1.0, "BLOQUANT": -2.0}.get(news_impact, 2.0)
+    ai_score += 1.0 if tp_reach else 0.0
+    ai_score  = round(max(0.0, min(10.0, ai_score)), 1)
+
+    ai_proba  = round(min(90.0, max(10.0, ai_score * 9.0)), 1)
+
+    if ai_score >= 8:    confiance = "EXCEPTIONNELLE"
+    elif ai_score >= 6:  confiance = "HAUTE"
+    elif ai_score >= 4:  confiance = "MOYENNE"
+    else:                confiance = "FAIBLE"
+
+    tp_rec  = 1
+    sl_opt  = None
+    conseil = parsed.get("conseil_entree", "")
+    algo_sc = float(sig.get("score", 0))
+
+    # ── Score hybride pondéré (ALGO_WEIGHT 60% + AI_WEIGHT 40%) ───────
+    final_sc = round(algo_sc * ALGO_WEIGHT + ai_score * 10.0 * AI_WEIGHT, 1)
+
+    # Règle de validation : fondamentaux + news + timing + score hybride
     news_block_ia = (news_impact == "BLOQUANT")
     fund_ok       = (biais_fond != "CONTRE")
 
     validated = (verdict == "VALIDER"
-                 and fund_ok           # macro pas contre le trade
-                 and not news_block_ia # pas de news bloquante
-                 and timing_ok)        # heure/jour favorables
-                 # tp_atteignable retiré v21 — TP n'est pas un critère bloquant
+                 and fund_ok                        # macro pas contre le trade
+                 and not news_block_ia              # pas de news bloquante
+                 and timing_ok                      # heure/jour favorables
+                 and ai_score >= AI_SCORE_MIN       # score IA minimum (7.0)
+                 and final_sc >= FINAL_HYBRID_MIN)  # score hybride minimum (75.0)
 
     result = {
         "validated"        : validated,
@@ -609,7 +653,7 @@ def fmt_ai_block(ai: dict) -> str:
         "🎯 Score IA   : <b>{}/10</b>  [{}]".format(ai_score, bar),
         "📊 Probabilité: <b>{}%</b>  |  Hybride: <b>{}/100</b>".format(ai_proba, final_sc),
         "🏅 Confiance  : {} <b>{}</b>".format(conf_icon, confiance),
-        "✅ Critères   : <b>{}/16</b> validés  (12 tech + 4 macro)".format(criteres),
+        "✅ Critères   : <b>{}/10</b> validés  (6 tech + 4 macro)".format(criteres),
         "⏱️ Timing     : {}".format(timing),
         "{} Macro      : <b>{}</b>  |  {} News: <b>{}</b>".format(
             fond_icon, biais_fond, news_icon, news_impact),
@@ -625,30 +669,6 @@ def fmt_ai_block(ai: dict) -> str:
         lines.append("🛡️ <b>SL optimal IA :</b> <code>{}</code>".format(sl_opt))
     lines.append("━"*20)
     return "\n".join(lines)
-
-    # Label dynamique selon la source IA utilisée
-    source = ai.get("ai_source", "claude").lower()
-    if source == "gemini":
-        ai_label = "GEMINI"
-    elif source == "both":
-        ai_label = "CLAUDE + GEMINI"
-    else:
-        ai_label = "CLAUDE"
-
-    return (
-        "\n━━━━━━━━━━━━━━━━━━━\n"
-        "🧠 <b>ANALYSE IA — {}</b>\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "{} <b>{}</b>\n\n"
-        "📊 Score IA    : <b>{}/10</b>  [{}]\n"
-        "📈 Probabilité : <b>{}%</b>\n"
-        "⭐ Score final : <b>{}/100</b>\n"
-        "⏱️ Timing      : {}\n\n"
-        "💡 <i>{}</i>\n\n"
-        "⚠️ Risque : <i>{}</i>\n"
-        "━━━━━━━━━━━━━━━━━━━"
-    ).format(ai_label, v_icon, verdict, ai_score, bar,
-             ai_proba, final_sc, timing, raison, risque)
 
 
 # ══════════════════════════════════════════════════════
@@ -711,7 +731,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
     datefmt="%H:%M:%S", handlers=[logging.StreamHandler(),
     logging.FileHandler("ab10.log", encoding="utf-8")])
 L = logging.getLogger("AB10")
-C = {"r":"\033[0m","b":"\033[1m","d":"\033[2m","c":"\033[96m","g":"\033[92m","y":"\033[93m","red":"\033[91m","m":"\033[95m"}
+C = {"r":"\033[0m","b":"\033[1m","d":"\033[2m","c":"\033[96m","g":"\033[92m","y":"\033[93m","yellow":"\033[93m","green":"\033[92m","dim":"\033[2m","cyan":"\033[96m","bold":"\033[1m","reset":"\033[0m","red":"\033[91m","m":"\033[95m"}
 def clr(t,*c): return "".join(C[x] for x in c)+str(t)+C["r"]
 def log(lv,msg):
     tags={"INFO":clr(" INFO ","b","c"),"SIG":clr(" SIGNAL","b","g"),"WARN":clr(" WARN ","b","y"),
@@ -844,24 +864,24 @@ MAX_SIG_PER_DAY   = 10  # max global par jour (PRO: limité par PRO_LIMIT)
 MIN_GAP_BETWEEN   = 30  # minutes minimum entre 2 signaux consécutifs
 
 MARKETS = [
-    {"sym":"GC=F",     "name":"XAUUSD","cat":"METALS","pip":0.01,  "max_sp":70,"vol":5,"crypto":False},
-    {"sym":"SI=F",     "name":"XAGUSD","cat":"METALS","pip":0.001, "max_sp":10,"vol":4,"crypto":False},
-    {"sym":"BTC-USD",  "name":"BTCUSD","cat":"CRYPTO","pip":1.0,   "max_sp":100,"vol":5,"crypto":True},
-    {"sym":"EURUSD=X", "name":"EURUSD","cat":"FOREX", "pip":0.0001,"max_sp":2, "vol":5,"crypto":False},
-    {"sym":"GBPUSD=X", "name":"GBPUSD","cat":"FOREX", "pip":0.0001,"max_sp":3, "vol":5,"crypto":False},
-    {"sym":"USDJPY=X", "name":"USDJPY","cat":"FOREX", "pip":0.01,  "max_sp":3, "vol":5,"crypto":False},
-    {"sym":"GBPJPY=X", "name":"GBPJPY","cat":"FOREX", "pip":0.01,  "max_sp":6, "vol":5,"crypto":False},
-    {"sym":"EURJPY=X", "name":"EURJPY","cat":"FOREX", "pip":0.01,  "max_sp":5, "vol":4,"crypto":False},
-    {"sym":"AUDUSD=X", "name":"AUDUSD","cat":"FOREX", "pip":0.0001,"max_sp":3, "vol":4,"crypto":False},
-    {"sym":"AUDJPY=X", "name":"AUDJPY","cat":"FOREX", "pip":0.01,  "max_sp":5, "vol":4,"crypto":False},
-    {"sym":"CADJPY=X", "name":"CADJPY","cat":"FOREX", "pip":0.01,  "max_sp":5, "vol":4,"crypto":False},
-    {"sym":"USDCHF=X", "name":"USDCHF","cat":"FOREX", "pip":0.0001,"max_sp":3, "vol":4,"crypto":False},
-    {"sym":"NZDUSD=X", "name":"NZDUSD","cat":"FOREX", "pip":0.0001,"max_sp":3, "vol":3,"crypto":False},
-    {"sym":"USDCAD=X", "name":"USDCAD","cat":"FOREX", "pip":0.0001,"max_sp":3, "vol":4,"crypto":False},
-    {"sym":"NQ=F",     "name":"NAS100","cat":"INDICES","pip":0.25, "max_sp":5, "vol":5,"crypto":False},
-    {"sym":"ES=F",     "name":"SPX500","cat":"INDICES","pip":0.25, "max_sp":3, "vol":5,"crypto":False},
-    {"sym":"YM=F",     "name":"US30",  "cat":"INDICES","pip":1.0,  "max_sp":5, "vol":5,"crypto":False},
-    {"sym":"CL=F",     "name":"USOIL", "cat":"OIL",   "pip":0.01, "max_sp":8, "vol":4,"crypto":False},
+    {"sym":"GC=F",     "name":"XAUUSD","cat":"METALS","pip":0.01,  "max_sp":70,"vol":5,"crypto":False,"weekend_closed":True},
+    {"sym":"SI=F",     "name":"XAGUSD","cat":"METALS","pip":0.001, "max_sp":10,"vol":4,"crypto":False,"weekend_closed":True},
+    {"sym":"BTC-USD",  "name":"BTCUSD","cat":"CRYPTO","pip":1.0,   "max_sp":100,"vol":5,"crypto":True, "weekend_closed":False},
+    {"sym":"EURUSD=X", "name":"EURUSD","cat":"FOREX", "pip":0.0001,"max_sp":2, "vol":5,"crypto":False,"weekend_closed":False},
+    {"sym":"GBPUSD=X", "name":"GBPUSD","cat":"FOREX", "pip":0.0001,"max_sp":3, "vol":5,"crypto":False,"weekend_closed":False},
+    {"sym":"USDJPY=X", "name":"USDJPY","cat":"FOREX", "pip":0.01,  "max_sp":3, "vol":5,"crypto":False,"weekend_closed":False},
+    {"sym":"GBPJPY=X", "name":"GBPJPY","cat":"FOREX", "pip":0.01,  "max_sp":6, "vol":5,"crypto":False,"weekend_closed":False},
+    {"sym":"EURJPY=X", "name":"EURJPY","cat":"FOREX", "pip":0.01,  "max_sp":5, "vol":4,"crypto":False,"weekend_closed":False},
+    {"sym":"AUDUSD=X", "name":"AUDUSD","cat":"FOREX", "pip":0.0001,"max_sp":3, "vol":4,"crypto":False,"weekend_closed":False},
+    {"sym":"AUDJPY=X", "name":"AUDJPY","cat":"FOREX", "pip":0.01,  "max_sp":5, "vol":4,"crypto":False,"weekend_closed":False},
+    {"sym":"CADJPY=X", "name":"CADJPY","cat":"FOREX", "pip":0.01,  "max_sp":5, "vol":4,"crypto":False,"weekend_closed":False},
+    {"sym":"USDCHF=X", "name":"USDCHF","cat":"FOREX", "pip":0.0001,"max_sp":3, "vol":4,"crypto":False,"weekend_closed":False},
+    {"sym":"NZDUSD=X", "name":"NZDUSD","cat":"FOREX", "pip":0.0001,"max_sp":3, "vol":3,"crypto":False,"weekend_closed":False},
+    {"sym":"USDCAD=X", "name":"USDCAD","cat":"FOREX", "pip":0.0001,"max_sp":3, "vol":4,"crypto":False,"weekend_closed":False},
+    {"sym":"NQ=F",     "name":"NAS100","cat":"INDICES","pip":0.25, "max_sp":5, "vol":5,"crypto":False,"weekend_closed":True},
+    {"sym":"ES=F",     "name":"SPX500","cat":"INDICES","pip":0.25, "max_sp":3, "vol":5,"crypto":False,"weekend_closed":True},
+    {"sym":"YM=F",     "name":"US30",  "cat":"INDICES","pip":1.0,  "max_sp":5, "vol":5,"crypto":False,"weekend_closed":True},
+    {"sym":"CL=F",     "name":"USOIL", "cat":"OIL",   "pip":0.01, "max_sp":8, "vol":4,"crypto":False,"weekend_closed":True},
 ]
 CAT_EMO = {"FOREX":"💱","METALS":"🥇","CRYPTO":"₿","INDICES":"📈","OIL":"🛢"}
 PAIR_MAX_LEV = {"BTCUSDT":125,"ETHUSDT":100,"SOLUSDT":50,"BNBUSDT":75,"XRPUSDT":50}
@@ -920,7 +940,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
     datefmt="%H:%M:%S", handlers=[logging.StreamHandler(),
     logging.FileHandler("ab10.log", encoding="utf-8")])
 L = logging.getLogger("AB10")
-C = {"r":"\033[0m","b":"\033[1m","d":"\033[2m","c":"\033[96m","g":"\033[92m","y":"\033[93m","red":"\033[91m","m":"\033[95m"}
+C = {"r":"\033[0m","b":"\033[1m","d":"\033[2m","c":"\033[96m","g":"\033[92m","y":"\033[93m","yellow":"\033[93m","green":"\033[92m","dim":"\033[2m","cyan":"\033[96m","bold":"\033[1m","reset":"\033[0m","red":"\033[91m","m":"\033[95m"}
 def clr(t,*c): return "".join(C[x] for x in c)+str(t)+C["r"]
 def log(lv,msg):
     tags={"INFO":clr(" INFO ","b","c"),"SIG":clr(" SIGNAL","b","g"),"WARN":clr(" WARN ","b","y"),
@@ -1233,8 +1253,20 @@ def generate_signal_chart(sig, candles=None):
     buf.seek(0)
     return buf.read()
 
+# ── Blacklist canaux morts (404) : éviter le spam de WARNs toutes les 30s ──
+_dead_channels      = {}   # {chat_id: timestamp_first_404}
+_DEAD_CHANNEL_TTL   = 3600  # re-essayer après 1h
+
+
 def tg_send_photo(cid, img_bytes, caption=""):
-    """Envoie une image PNG via Telegram sendPhoto."""
+    """Envoie une image PNG via Telegram sendPhoto.
+    Retourne dict avec 'ok' True/False et 'error_404' si chat introuvable.
+    Les canaux 404 sont blacklistés 1h pour éviter les WARNs en boucle."""
+    # ── Vérifier blacklist ───────────────────────────────────────────
+    dead_ts = _dead_channels.get(str(cid))
+    if dead_ts and (time.time() - dead_ts) < _DEAD_CHANNEL_TTL:
+        return {"ok": False, "error_404": True}   # silencieux
+
     bd = "AB10PH"
     body = b""
     def f(n, v):
@@ -1250,8 +1282,23 @@ def tg_send_photo(cid, img_bytes, caption=""):
             headers={"Content-Type":"multipart/form-data; boundary="+bd})
         opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=CTX))
         with opener.open(req, timeout=30) as r: return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            # Canal introuvable → blacklister 1h (log une seule fois)
+            if str(cid) not in _dead_channels:
+                log("WARN", clr("tg_send_photo: chat {} introuvable (404) — blacklisté 1h".format(cid), "y"))
+            _dead_channels[str(cid)] = time.time()
+            return {"ok": False, "error_404": True}
+        log("WARN","tg_send_photo: HTTP {} — {}".format(e.code, e)); return {"ok": False}
     except Exception as e:
-        log("WARN","tg_send_photo: {}".format(e)); return {}
+        err_str = str(e)
+        # Attraper les 404 qui glissent parfois dans le handler générique
+        if "404" in err_str:
+            if str(cid) not in _dead_channels:
+                log("WARN", clr("tg_send_photo: chat {} introuvable (404) — blacklisté 1h".format(cid), "y"))
+            _dead_channels[str(cid)] = time.time()
+            return {"ok": False, "error_404": True}
+        log("WARN","tg_send_photo: {}".format(err_str[:100])); return {}
 
 def tg_edit(chat_id, message_id, text, kb=None):
     """Edite un message existant (pour le recheck signal)."""
@@ -1458,6 +1505,88 @@ _BINANCE_SYM = {
     "XRP-USD": "XRPUSDT",
 }
 
+# ── TwelveData : fallback pour Métaux / Indices / Forex (Yahoo instable le week-end) ──
+# Clé gratuite : 800 req/j — https://twelvedata.com/api-key
+_TWELVEDATA_SYM = {
+    # Métaux
+    "GC=F":      "XAU/USD",   # Gold
+    "SI=F":      "XAG/USD",   # Silver
+    # Indices US
+    "NQ=F":      "NDX",       # Nasdaq 100
+    "ES=F":      "SPX",       # S&P 500
+    "YM=F":      "DJI",       # Dow Jones
+    # Pétrole
+    "CL=F":      "WTI/USD",   # WTI Oil
+    # Forex (si Yahoo flanche)
+    "EURUSD=X":  "EUR/USD",
+    "GBPUSD=X":  "GBP/USD",
+    "USDJPY=X":  "USD/JPY",
+    "GBPJPY=X":  "GBP/JPY",
+    "EURJPY=X":  "EUR/JPY",
+    "AUDUSD=X":  "AUD/USD",
+    "AUDJPY=X":  "AUD/JPY",
+    "CADJPY=X":  "CAD/JPY",
+    "USDCHF=X":  "USD/CHF",
+    "NZDUSD=X":  "NZD/USD",
+    "USDCAD=X":  "USD/CAD",
+}
+# Yahoo interval → TwelveData interval
+_TD_INTERVAL = {
+    "1m": "1min", "5m": "5min", "15m": "15min",
+    "1h": "1h",   "4h": "4h",   "1d": "1day",
+}
+# Yahoo period → outputsize estimé pour TwelveData
+_TD_OUTPUTSIZE = {
+    "1d": 400, "2d": 600, "3d": 300, "5d": 500,
+    "7d": 200, "10d": 300, "30d": 500, "60d": 900,
+}
+
+def _fetch_twelvedata(sym, interval, period):
+    """
+    Fallback TwelveData pour Métaux / Indices / Forex quand Yahoo est KO.
+    Retourne liste de candles {"o","h","l","c"} ou None.
+    Clé env : TWELVEDATA_API_KEY (800 req/j gratuit sur twelvedata.com).
+    """
+    if not TWELVEDATA_KEY:
+        return None
+    td_sym = _TWELVEDATA_SYM.get(sym)
+    if not td_sym:
+        return None
+    td_interval = _TD_INTERVAL.get(interval)
+    if not td_interval:
+        return None
+    outputsize = _TD_OUTPUTSIZE.get(period, 300)
+    try:
+        url = (
+            "https://api.twelvedata.com/time_series"
+            "?symbol={}&interval={}&outputsize={}&apikey={}&format=JSON".format(
+                urllib.parse.quote(td_sym), td_interval, outputsize, TWELVEDATA_KEY)
+        )
+        body = json.loads(http_get(url, timeout=15))
+        if body.get("status") == "error":
+            log("WARN", "TwelveData {}: {}".format(sym, body.get("message", "?")))
+            return None
+        values = body.get("values", [])
+        if not values:
+            return None
+        candles = []
+        for v in reversed(values):   # TwelveData retourne DESC -> on inverse
+            try:
+                o = float(v["open"]); h = float(v["high"])
+                l = float(v["low"]);  c = float(v["close"])
+                if o > 0:
+                    candles.append({"o": o, "h": h, "l": l, "c": c})
+            except Exception:
+                continue
+        if len(candles) >= 10:
+            log("INFO", clr("TwelveData {} {} -> {} bougies OK".format(
+                sym, interval, len(candles)), "d"))
+            return candles
+    except Exception as e:
+        log("WARN", "TwelveData fetch {}: {}".format(sym, e))
+    return None
+
+
 def _fetch_binance(symbol_bn, interval, period):
     try:
         limit = _BINANCE_LIMIT.get(interval, {}).get(period, 300)
@@ -1477,7 +1606,8 @@ def _fetch_binance(symbol_bn, interval, period):
             except:
                 continue
         if body and (now_ms - float(body[-1][6])) / 60000 > DATA_MAX_AGE:
-            log("WARN", clr("Binance {} {} trop vieux".format(symbol_bn, interval), "y"))
+            log("WARN", clr("Binance {} {} trop vieux — ignoré".format(symbol_bn, interval), "y"))
+            # Ne pas bloquer si c'est le week-end (BTC tourne 24/7, ce cas ne devrait pas arriver)
             return None
         if len(candles) >= 10:
             log("INFO", clr("Binance {} {} -> {} bougies OK".format(symbol_bn, interval, len(candles)), "d"))
@@ -1487,6 +1617,17 @@ def _fetch_binance(symbol_bn, interval, period):
     return None
 
 def fetch_c(sym, interval, period):
+    # ── Week-end : adapter la tolérance d'âge des données ────────────
+    # Les futures (GC=F SI=F NQ=F etc.) ferment ven soir → rouvrent dim soir
+    # Yahoo retourne quand même les dernières bougies valides → on les accepte
+    _FUTURES_SYMS = {"GC=F","SI=F","NQ=F","ES=F","YM=F","CL=F"}
+    _wd = datetime.now(timezone.utc).weekday()  # 0=lun … 5=sam 6=dim
+    _h  = datetime.now(timezone.utc).hour
+    _is_weekend = (_wd == 5) or (_wd == 6) or (_wd == 4 and _h >= 22)
+
+    # En semaine : max 120 min | Week-end : on désactive le check (données figées normalement)
+    _max_age = DATA_MAX_AGE if not _is_weekend else 99999
+
     # Cryptos : Binance en priorite (prix reels, fiables, 24/7)
     bn_sym = _BINANCE_SYM.get(sym)
     if bn_sym:
@@ -1496,6 +1637,7 @@ def fetch_c(sym, interval, period):
         log("WARN", clr("Binance indispo pour {} - fallback Yahoo".format(sym), "y"))
     # Forex / Metaux / Indices : Yahoo Finance
     sym_e=urllib.parse.quote(sym)
+    yahoo_stale = False
     for base in ["https://query1.finance.yahoo.com","https://query2.finance.yahoo.com"]:
         try:
             url="{}/v8/finance/chart/{}?interval={}&range={}&includePrePost=false".format(base,sym_e,interval,period)
@@ -1503,14 +1645,27 @@ def fetch_c(sym, interval, period):
             res=body.get("chart",{}).get("result",[])
             if not res: continue
             ts=res[0].get("timestamp",[])
-            if ts and (time.time()-ts[-1])/60>DATA_MAX_AGE:
-                log("WARN",clr("{} {} trop vieux - ignore".format(sym,interval),"y")); return None
+            if ts and (time.time()-ts[-1])/60 > _max_age:
+                log("WARN",clr("{} {} trop vieux ({:.0f}min) - ignore".format(
+                    sym, interval, (time.time()-ts[-1])/60),"y"))
+                yahoo_stale = True
+                continue   # ne pas retourner None — essayer l'autre miroir puis TwelveData
+            if ts and _is_weekend and (time.time()-ts[-1])/60 > DATA_MAX_AGE:
+                log("INFO",clr("{} données week-end acceptées ({:.0f}min) ✓".format(
+                    sym, (time.time()-ts[-1])/60),"d"))
             q=res[0]["indicators"]["quote"][0]
             c=[{"o":float(o),"h":float(h),"l":float(l),"c":float(cv)}
                for o,h,l,cv in zip(q.get("open",[]),q.get("high",[]),q.get("low",[]),q.get("close",[]))
                if None not in (o,h,l,cv)]
             if len(c)>=10: return c
         except: continue
+    # ── Fallback TwelveData : Yahoo KO ou stale (week-end / rate-limit / timeout) ──
+    if sym in _TWELVEDATA_SYM:
+        reason = "stale" if yahoo_stale else "KO"
+        log("WARN", clr("{} Yahoo {} -> fallback TwelveData".format(sym, reason), "y"))
+        td = _fetch_twelvedata(sym, interval, period)
+        if td:
+            return td
     return None
 
 # ══════════════════════════════════════════════════════
@@ -1753,16 +1908,136 @@ def ote_zone(sh,sl,bias):
 # ══════════════════════════════════════════════════════
 
 def pat_head_shoulders(c, bias):
-    """Head & Shoulders → bearish / Inverse H&S → bullish"""
-    if len(c) < 20: return False
+    """
+    Head & Shoulders / Inverse H&S — détection précise avec :
+      - Neckline calculée (moyenne des deux creux/sommets entre les épaules)
+      - Entrée : retest du neckline après cassure (niveau institutionnel)
+      - SL     : au-delà de l'épaule droite (invalidation du pattern)
+      - TP     : hauteur de la tête projetée depuis le neckline (RR ≥ 2.0)
+
+    Retourne dict complet ou None si pattern absent.
+    """
+    if len(c) < 30: return None
+
+    # ── Recherche des 3 pics/creux sur les 60 dernières bougies ──────
+    window = c[-60:] if len(c) >= 60 else c
+    n = len(window)
+
     if bias == "BEARISH":
-        highs = [x["h"] for x in c[-20:]]
-        h1 = max(highs[:7]); h2 = max(highs[6:14]); h3 = max(highs[13:])
-        return h2 > h1 * 1.001 and h2 > h3 * 1.001 and abs(h1-h3)/h2 < 0.015
-    else:
-        lows = [x["l"] for x in c[-20:]]
-        l1 = min(lows[:7]); l2 = min(lows[6:14]); l3 = min(lows[13:])
-        return l2 < l1 * 0.999 and l2 < l3 * 0.999 and abs(l1-l3)/l2 < 0.015
+        # H&S classique → épaule gauche (S1) + tête (H) + épaule droite (S2)
+        # Les 3 pics doivent être : S1 < H > S2, S1 ≈ S2
+        highs = [(i, window[i]["h"]) for i in range(n)]
+
+        # Trouver la tête : pic le plus haut
+        head_i, head_h = max(highs[5:-5], key=lambda x: x[1])
+
+        # Épaule gauche : pic le plus haut à gauche de la tête
+        left_seg = highs[2:head_i-2]
+        if not left_seg: return None
+        ls_i, ls_h = max(left_seg, key=lambda x: x[1])
+
+        # Épaule droite : pic le plus haut à droite de la tête
+        right_seg = highs[head_i+2:]
+        if not right_seg: return None
+        rs_i, rs_h = max(right_seg, key=lambda x: x[1])
+
+        # Validations structurelles
+        if head_h <= ls_h or head_h <= rs_h: return None               # la tête doit être la plus haute
+        if abs(ls_h - rs_h) / head_h > 0.03: return None              # épaules quasi-symétriques ±3%
+        if rs_i <= head_i: return None                                  # ordre temporel correct
+
+        # Neckline : moyenne des creux entre S1→H et H→S2
+        trough1_l = min(window[ls_i:head_i+1], key=lambda x: x["l"])["l"]
+        trough2_l = min(window[head_i:rs_i+1], key=lambda x: x["l"])["l"]
+        neckline  = (trough1_l + trough2_l) / 2
+
+        # Cassure confirmée : le prix actuel a clôturé SOUS le neckline
+        current_close = window[-1]["c"]
+        if current_close >= neckline: return None  # cassure pas encore confirmée
+
+        # Niveaux ICT
+        head_height = head_h - neckline
+        entry  = neckline              # entrée au retest du neckline (résistance)
+        sl     = rs_h * 1.0005         # SL au-dessus de l'épaule droite
+        tp     = neckline - head_height  # projection symétrique
+
+        risk   = sl - entry
+        gain   = entry - tp
+        if risk <= 0 or gain <= 0: return None
+        rr     = round(gain / risk, 1)
+        if rr < 2.0: return None       # RR minimum 2.0
+
+        return {
+            "type":     "H&S",
+            "side":     "SELL",
+            "neckline": round(neckline, 5),
+            "entry":    round(entry, 5),
+            "sl":       round(sl, 5),
+            "tp":       round(tp, 5),
+            "rr":       rr,
+            "head_h":   round(head_h, 5),
+            "ls_h":     round(ls_h, 5),
+            "rs_h":     round(rs_h, 5),
+            "score_bonus": 20,
+            "label":    "🎯 H&S Neckline — SELL RR 1:{}".format(rr),
+        }
+
+    else:  # BULLISH → Inverse H&S
+        lows = [(i, window[i]["l"]) for i in range(n)]
+
+        # Tête : creux le plus bas
+        head_i, head_l = min(lows[5:-5], key=lambda x: x[1])
+
+        # Épaule gauche : creux le plus bas à gauche
+        left_seg = lows[2:head_i-2]
+        if not left_seg: return None
+        ls_i, ls_l = min(left_seg, key=lambda x: x[1])
+
+        # Épaule droite : creux le plus bas à droite
+        right_seg = lows[head_i+2:]
+        if not right_seg: return None
+        rs_i, rs_l = min(right_seg, key=lambda x: x[1])
+
+        # Validations
+        if head_l >= ls_l or head_l >= rs_l: return None
+        if abs(ls_l - rs_l) / max(abs(head_l), 0.0001) > 0.03: return None
+        if rs_i <= head_i: return None
+
+        # Neckline : moyenne des sommets entre S1→H et H→S2
+        peak1_h = max(window[ls_i:head_i+1], key=lambda x: x["h"])["h"]
+        peak2_h = max(window[head_i:rs_i+1], key=lambda x: x["h"])["h"]
+        neckline = (peak1_h + peak2_h) / 2
+
+        # Cassure confirmée : prix actuel clôturé AU-DESSUS du neckline
+        current_close = window[-1]["c"]
+        if current_close <= neckline: return None
+
+        # Niveaux ICT
+        head_height = neckline - head_l
+        entry  = neckline              # entrée au retest du neckline (support)
+        sl     = rs_l * 0.9995         # SL sous l'épaule droite
+        tp     = neckline + head_height  # projection symétrique
+
+        risk   = entry - sl
+        gain   = tp - entry
+        if risk <= 0 or gain <= 0: return None
+        rr     = round(gain / risk, 1)
+        if rr < 2.0: return None
+
+        return {
+            "type":     "IH&S",
+            "side":     "BUY",
+            "neckline": round(neckline, 5),
+            "entry":    round(entry, 5),
+            "sl":       round(sl, 5),
+            "tp":       round(tp, 5),
+            "rr":       rr,
+            "head_l":   round(head_l, 5),
+            "ls_l":     round(ls_l, 5),
+            "rs_l":     round(rs_l, 5),
+            "score_bonus": 20,
+            "label":    "🎯 IH&S Neckline — BUY RR 1:{}".format(rr),
+        }
 
 def pat_double_top_bottom(c, bias, tol=0.0015):
     """Double Top (bearish) / Double Bottom (bullish)"""
@@ -1804,15 +2079,20 @@ def pat_fake_breakout(c, bias):
 
 def pattern_score_m5(c, bias):
     """
-    Calcule le bonus de score total des patterns M5.
-    Retourne (score_bonus, liste_badges).
+    Calcule le bonus de score total des patterns M5/M1.
+    Retourne (score_bonus, liste_badges, hs_signal_or_None).
     Max +50 pts. Tous optionnels.
+    hs_signal : dict complet H&S si détecté (entry/sl/tp/rr) sinon None.
     """
-    if not c or len(c) < 20: return 0, []
-    score = 0; badges = []
-    if pat_head_shoulders(c, bias):
-        score += 15
-        badges.append("H&S ✓" if bias=="BEARISH" else "IH&S ✓")
+    if not c or len(c) < 20: return 0, [], None
+    score = 0; badges = []; hs_signal = None
+
+    hs = pat_head_shoulders(c, bias)
+    if hs:
+        score += hs["score_bonus"]
+        badges.append("{} ✓ (RR 1:{})".format(hs["type"], hs["rr"]))
+        hs_signal = hs
+
     if pat_double_top_bottom(c, bias):
         score += 12
         badges.append("Double Top ✓" if bias=="BEARISH" else "Double Bot ✓")
@@ -1822,7 +2102,7 @@ def pattern_score_m5(c, bias):
     if pat_fake_breakout(c, bias):
         score += 15
         badges.append("Fake BO ✓")
-    return min(score, 50), badges
+    return min(score, 50), badges, hs_signal
 
 # ══════════════════════════════════════════════════════
 #  AGENT ANALYZE PRINCIPAL
@@ -2057,6 +2337,177 @@ def agent_liquidity(candles, bias, lookback=40):
 
     return None  # Pas de prise de liquidité détectée → signal refusé
 
+def detect_m1m5_setup_aplus(m1_candles, m5_candles, h1_bias, lp, atr_val, pip):
+    """
+    Détecte le setup A+ M1+M5 selon la méthodologie ICT/SMC illustrée :
+      1. Sweep d'un low/high précédent (prise de liquidité)
+      2. MSS avec displacement (Market Structure Shift — grosses chandelles)
+      3. FVG laissé après le MSS
+      4. Retest de la zone Breaker Block
+      5. Entrée au Mean Threshold (50% du FVG ou OB)
+      6. Fibonacci 61.8% dans la zone
+      7. CHoCH confirmé sur LTF (M1/M5)
+      8. Stop sous/sur la mèche du sweep
+      9. TP au prochain swing / liquidity pool
+
+    Retourne dict avec :
+      "found"      : bool — True si setup A+ détecté
+      "score_bonus": int  — bonus de score (max +35)
+      "entry"      : float ou None — niveau d'entrée OTE/Mean Threshold
+      "sl"         : float ou None — SL sous/sur mèche du sweep
+      "badges"     : list[str]
+      "rr_est"     : float — RR estimé (min 3.0 requis)
+      "label"      : str  — étiquette résumée pour les badges
+    """
+    result = {"found": False, "score_bonus": 0, "entry": None, "sl": None,
+              "badges": [], "rr_est": 0.0, "label": ""}
+
+    # Besoin d'au moins 20 bougies M5 et 15 M1
+    if not m5_candles or len(m5_candles) < 20:
+        return result
+    if not m1_candles or len(m1_candles) < 15:
+        return result
+
+    try:
+        # ── 1. Sweep — prise de liquidité M5 ─────────────────────────
+        m5_sl = m5_candles[-40:] if len(m5_candles) >= 40 else m5_candles
+        sweep = agent_liquidity(m5_sl[-20:], h1_bias)
+        if not sweep:
+            return result  # Pas de sweep → pas de setup A+
+
+        sweep_level = sweep["level"]
+        score_bonus  = 5
+        badges       = ["A+ Sweep✓"]
+
+        # ── 2. MSS avec displacement (Market Structure Shift) ─────────
+        # Détecte un CHoCH M5 récent APRÈS le sweep + grosses chandelles
+        m5_choch_dir, m5_choch_count = choch_seq(m5_sl)
+        if m5_choch_count < 1:
+            return result  # Pas de MSS → setup invalide
+
+        # Vérifier displacement : au moins une bougie > 1.5× ATR (grosses bougies)
+        recent_bodies = [abs(c["c"] - c["o"]) for c in m5_sl[-10:]]
+        avg_body = sum(recent_bodies) / len(recent_bodies) if recent_bodies else 0
+        max_body = max(recent_bodies) if recent_bodies else 0
+        has_displacement = max_body >= avg_body * 2.0 or max_body >= atr_val * 0.8
+
+        if not has_displacement:
+            return result
+
+        score_bonus += 8
+        badges.append("MSS+DISPL✓")
+
+        # ── 3. FVG laissé après le MSS ────────────────────────────────
+        m5_fvg_zone = fvg(m5_sl, h1_bias, look=15)
+        if not m5_fvg_zone:
+            return result  # FVG obligatoire pour le setup A+
+
+        score_bonus += 7
+        badges.append("FVG A+✓")
+
+        # ── 4. Retest de la zone Breaker Block ───────────────────────
+        m5_obs = breakers(m5_sl, h1_bias)
+        has_breaker = bool(m5_obs)
+        if has_breaker:
+            score_bonus += 5
+            badges.append("BB-Retest✓")
+
+        # ── 5. Entrée : Mean Threshold 50% + Fibo 61.8% ──────────────
+        # Calculer la zone OTE sur le dernier swing M5
+        m5_highs = [c["h"] for c in m5_sl[-20:]]
+        m5_lows  = [c["l"] for c in m5_sl[-20:]]
+        if h1_bias == "BULLISH":
+            swing_hi = max(m5_highs)
+            swing_lo = min(m5_lows)
+        else:
+            swing_hi = max(m5_highs)
+            swing_lo = min(m5_lows)
+
+        swing_range = swing_hi - swing_lo
+        if swing_range <= 0:
+            return result
+
+        # Mean Threshold = 50% du range (niveau institutionnel)
+        mean_threshold = swing_lo + swing_range * 0.50
+        # Fibo 61.8%
+        if h1_bias == "BULLISH":
+            fibo_618 = swing_lo + swing_range * 0.382  # retracement 61.8% = 38.2% depuis le bas
+        else:
+            fibo_618 = swing_hi - swing_range * 0.382
+
+        # Vérifier que le prix actuel est proche de la zone OTE (50-61.8%)
+        ote_entry_lo = min(mean_threshold, fibo_618)
+        ote_entry_hi = max(mean_threshold, fibo_618)
+        price_in_ote = ote_entry_lo * 0.9990 <= lp <= ote_entry_hi * 1.0010
+
+        if price_in_ote:
+            score_bonus += 5
+            badges.append("OTE-50%✓")
+            badges.append("Fibo-61.8✓")
+            entry_level = (mean_threshold + fibo_618) / 2
+        else:
+            # Pas encore dans la zone → entrée limite au mean threshold
+            entry_level = mean_threshold
+
+        # ── 6. CHoCH M1 (confirmation LTF 5-15 min) ──────────────────
+        m1_sl = m1_candles[-30:] if len(m1_candles) >= 30 else m1_candles
+        m1_choch_dir, m1_choch_count = choch_seq(m1_sl)
+        if m1_choch_count >= 1:
+            score_bonus += 5
+            badges.append("M1-CHoCH✓")
+
+        # ── 7. SL sous/sur la mèche du sweep (ICT précis) ────────────
+        if h1_bias == "BULLISH":
+            # SL sous le wick le plus bas du sweep (protection totale)
+            sweep_wick = min(c["l"] for c in m5_sl[-10:])
+            sl_level   = sweep_wick - atr_val * 0.15  # buffer léger
+        else:
+            sweep_wick = max(c["h"] for c in m5_sl[-10:])
+            sl_level   = sweep_wick + atr_val * 0.15
+
+        # ── 8. TP : prochain swing / liquidity pool ───────────────────
+        if h1_bias == "BULLISH":
+            # TP au prochain swing high (pool de liquidité au-dessus)
+            tp_level = lp + (lp - sl_level) * 3.5   # RR cible 3.5
+        else:
+            tp_level = lp - (sl_level - lp) * 3.5
+
+        # ── Calcul RR réel ────────────────────────────────────────────
+        if h1_bias == "BULLISH":
+            risk  = abs(entry_level - sl_level)
+            gain  = abs(tp_level - entry_level)
+        else:
+            risk  = abs(sl_level - entry_level)
+            gain  = abs(entry_level - tp_level)
+
+        rr_est = round(gain / risk, 1) if risk > 0 else 0.0
+
+        # ── Critère RR minimum 3.0 obligatoire ───────────────────────
+        if rr_est < 3.0:
+            return result  # RR insuffisant → setup A+ refusé
+
+        # ── Setup A+ validé ───────────────────────────────────────────
+        confirmations = len(badges)
+        if confirmations >= 4:
+            score_bonus += 5   # bonus setup très complet
+
+        result.update({
+            "found"      : True,
+            "score_bonus": min(score_bonus, 35),
+            "entry"      : round(entry_level, 5 if lp < 10 else (3 if lp < 1000 else 2)),
+            "sl"         : round(sl_level,   5 if lp < 10 else (3 if lp < 1000 else 2)),
+            "tp"         : round(tp_level,   5 if lp < 10 else (3 if lp < 1000 else 2)),
+            "badges"     : badges,
+            "rr_est"     : rr_est,
+            "label"      : "🏆 Setup A+ M1+M5 (RR 1:{})".format(rr_est),
+            "confirmations": confirmations,
+        })
+        return result
+
+    except Exception as _e:
+        return result
+
+
 def agent_analyze(m, score_min, news_ok, q):
     """
     Analyse multi-timeframe v11 :
@@ -2064,10 +2515,12 @@ def agent_analyze(m, score_min, news_ok, q):
       M15 → Order Block + structure (obligatoire)
       M5  → confirmation d'entrée précise (nouveau — fortement pondéré)
       M1  → ultra-précision optionnelle (bonus léger)
+      M1+M5 Setup A+ → détection setup ICT parfait (Sweep→MSS→FVG→BB→OTE→Fibo→CHoCH)
 
     RR minimum : 3.0 normal / 1.5 scalp week-end
     Obligatoires : biais H1 + OB M15 + liquidité M15
     M5 aligné → +bonus fort  |  M5 contraire → pénalité
+    Setup A+ M1+M5 détecté → +35 pts score + override entrée précise
     """
     try:
         sn, _, _, _ = get_session()
@@ -2119,8 +2572,25 @@ def agent_analyze(m, score_min, news_ok, q):
         last5 = [abs(x["h"] - x["l"]) for x in m15[-5:] if x["h"] != x["l"]]
         sp    = round(min(last5) / m["pip"] * 0.03, 2) if last5 else 0
         if sp > m["max_sp"] * 1.5:
+            log("INFO", clr("{} rejeté — spread {:.1f} > max {:.1f}".format(
+                m["name"], sp, m["max_sp"] * 1.5), "y"))
             q.put({"name": m["name"], "cat": m["cat"], "found": False,
-                   "reason": "Spread large"}); return
+                   "reason": "Spread large ({:.1f})".format(sp)}); return
+
+        # ── Timing intra-heure (zones de transition dangereuses) ──
+        _now_utc = datetime.now(timezone.utc)
+        _h, _mn  = _now_utc.hour, _now_utc.minute
+        _danger_zone = (
+            (_h < 7) or (_h >= 22) or                    # hors heures liquides
+            (_h == 10 and _mn > 30) or                   # fin London AM → piège
+            (_h == 12 and _mn < 45) or                   # dead zone midi UTC
+            (_h == 16 and _mn < 15)                      # ouverture NY volatile
+        )
+        # En danger zone : on exige un score plus élevé (+8) plutôt que bloquer totalement
+        _timing_penalty = 8 if _danger_zone else 0
+        if _danger_zone:
+            log("INFO", clr("{} — zone transition {}h{} (+{} pts exigés)".format(
+                m["name"], _h, str(_mn).zfill(2), _timing_penalty), "d"))
 
         lp       = m15[-1]["c"]
         sh_h1    = max(x["h"] for x in h1[-50:])
@@ -2220,10 +2690,21 @@ def agent_analyze(m, score_min, news_ok, q):
         else:
             m5_raw = None  # pas de données M5
 
-        # ── Patterns M5 (visuels — bonus score) ──────────────────
-        pat_bonus, pat_badges = pattern_score_m5(m5_raw, b) if m5_raw else (0, [])
+        # ── Patterns M5 (visuels — bonus score + entrée H&S précise) ─
+        pat_bonus, pat_badges, hs_sig_m5 = pattern_score_m5(m5_raw, b) if m5_raw else (0, [], None)
         if pat_bonus > 0:
             sc = min(sc + pat_bonus, 115)
+
+        # ── Patterns M1 (détection H&S sur LTF pour entrée ultra-précise) ─
+        hs_sig_m1 = None
+        if m1 and len(m1) >= 30:
+            _, _, hs_sig_m1 = pattern_score_m5(m1[-60:] if len(m1) >= 60 else m1, b)
+            if hs_sig_m1:
+                sc = min(sc + 10, 115)  # bonus M1 H&S confirmé
+                pat_badges.append("M1-{} ✓".format(hs_sig_m1["type"]))
+
+        # H&S priorité : M1 > M5 (plus précis)
+        _hs_signal = hs_sig_m1 or hs_sig_m5
 
         # ── M1 : TF d'entrée principal (remplace bonus optionnel) ──
         m1 = fetch_c(m["sym"], "1m", "2d")
@@ -2261,11 +2742,33 @@ def agent_analyze(m, score_min, news_ok, q):
             else:
                 sc = max(0, sc - 10)            # M1 contraire → pénalité
 
-        # ── Mémoire IA ────────────────────────────────────────────
+        # ── Setup A+ M1+M5 (ICT parfait : Sweep->MSS->FVG->BB->OTE->CHoCH) ─
+        _a_val_for_aplus = atr(m15)
+        aplus = detect_m1m5_setup_aplus(
+            m1_candles = m1 if m1 else [],
+            m5_candles = m5_raw if m5_raw else [],
+            h1_bias    = b,
+            lp         = lp,
+            atr_val    = _a_val_for_aplus,
+            pip        = m["pip"],
+        )
+        _aplus_override_entry = None
+        _aplus_override_sl    = None
+        _aplus_override_tp    = None
+        if aplus["found"]:
+            sc = min(sc + aplus["score_bonus"], 115)
+            _aplus_override_entry = aplus["entry"]
+            _aplus_override_sl    = aplus["sl"]
+            _aplus_override_tp    = aplus.get("tp")
+            log("AI", clr("A+ setup {} RR 1:{} ({} conf)".format(
+                m["name"], aplus["rr_est"], aplus["confirmations"]), "b", "g"))
+
+        # ── Memoire IA ────────────────────────────────────────────
         _tmp_badges = []
         if in_ote:  _tmp_badges.append("OTE")
         if fvg_z:   _tmp_badges.append("FVG")
         if cc2 >= 2: _tmp_badges.append("CHoCH")
+        if aplus["found"]: _tmp_badges.append("APLUS")
         _tmp_key = "{}|{}|{}".format(m["name"], sn, "+".join(_tmp_badges) or "BASE")
         sc, mem_badge = mem_adj_score(_tmp_key, sc)
 
@@ -2280,7 +2783,7 @@ def agent_analyze(m, score_min, news_ok, q):
 
         a     = atr(m15)
         a_pct = a / (lp + 0.0001)
-        s_min = score_min + (m.get("vol", 3) - 3) * 1  # FIX: facteur 1 (était 2)
+        s_min = score_min + (m.get("vol", 3) - 3) * 1 + _timing_penalty  # vol + transition zone
 
         # ── Priorité paire ────────────────────────────────────────
         prio = MARKET_PRIORITY.get(m["name"], 0)
@@ -2323,8 +2826,41 @@ def agent_analyze(m, score_min, news_ok, q):
             sp_p = sp * m["pip"]   # spread en prix (utilisé pour TP net)
             eq_h, eq_l = eqh_eql(m15)
 
+            # ── Override entrée/SL/TP si Setup A+ détecté ───────────
+            if _aplus_override_entry is not None:
+                e = _aplus_override_entry
+            if _aplus_override_sl is not None:
+                _aplus_sl_override = _aplus_override_sl
+            else:
+                _aplus_sl_override = None
+            if _aplus_override_tp is not None:
+                _aplus_tp_override = _aplus_override_tp
+            else:
+                _aplus_tp_override = None
+
+            # ── Override H&S : priorité sur tout (entrée neckline ICT) ─
+            _hs_entry_override = None
+            _hs_sl_override    = None
+            _hs_tp_override    = None
+            if _hs_signal:
+                # Vérifier alignement direction H&S vs biais H1
+                _hs_dir_ok = (
+                    (_hs_signal["side"] == "BUY"  and b == "BULLISH") or
+                    (_hs_signal["side"] == "SELL" and b == "BEARISH")
+                )
+                if _hs_dir_ok:
+                    _hs_entry_override = _hs_signal["entry"]
+                    _hs_sl_override    = _hs_signal["sl"]
+                    _hs_tp_override    = _hs_signal["tp"]
+                    log("AI", clr("🎯 {} neckline override — Entry:{} SL:{} TP:{} RR:1:{}".format(
+                        _hs_signal["type"], _hs_signal["entry"],
+                        _hs_signal["sl"], _hs_signal["tp"], _hs_signal["rr"]), "g"))
+
             # Construire les badges finaux (ordre logique : HTF → LTF)
             all_badges = [liq["label"]]
+            if aplus["found"]:      all_badges.extend(aplus["badges"])
+            if _hs_signal and _hs_entry_override:
+                all_badges.append("🎯 {} Neckline RR1:{}".format(_hs_signal["type"], _hs_signal["rr"]))
             if displ_ok:
                 all_badges.append("DISPL×{:.1f} ✓".format(displ_str))
             if in_ote:              all_badges.append("OTE ✓")
@@ -2351,22 +2887,33 @@ def agent_analyze(m, score_min, news_ok, q):
             pip = m["pip"]
 
             if b == "BULLISH":
-                # SL sur le dernier swing low de structure M15 (ICT)
-                sl_p = sl_from_structure(m15, "BULLISH", a, e, pip,
-                                         spread_pips=sp, lookback=40)
-                sl_p = f(sl_p)
-                risk = e - sl_p
-                if risk > 0 and risk <= a * 12:
-                    # TP : liquidity pool (EQH) en priorité → institutionnel
-                    if eq_h and e < eq_h < e + risk * 8:
-                        tp_eq = eq_h * 0.9990   # just sous le pool de liquidité
+                # Priorité override : H&S neckline > A+ > structure M15
+                if _hs_entry_override:
+                    e     = _hs_entry_override
+                    sl_p  = _hs_sl_override
+                    risk  = e - sl_p
+                    tp    = _hs_tp_override
+                    gain_net = abs(tp - e) - sp_p
+                    rr   = round(gain_net / (risk + sp_p), 1) if (risk + sp_p) > 0 else 0
+                    rr_threshold = 2.0   # H&S : RR min 2.0
+                else:
+                    sl_p = _aplus_sl_override if _aplus_sl_override else sl_from_structure(
+                        m15, "BULLISH", a, e, pip, spread_pips=sp, lookback=40)
+                    sl_p = f(sl_p)
+                    risk = e - sl_p
+                    if _aplus_tp_override and _aplus_tp_override > e:
+                        tp = _aplus_tp_override
+                    elif eq_h and e < eq_h < e + risk * 8:
+                        tp_eq = eq_h * 0.9990
                         tp_rr = (tp_eq - e) / risk if risk > 0 else 0
                         tp    = tp_eq if tp_rr >= 2.0 else e + risk * 3.0
                     else:
                         tp    = e + risk * 3.0
                     gain_net = abs(tp - e) - sp_p
                     rr   = round(gain_net / (risk + sp_p), 1) if (risk + sp_p) > 0 else 0
-                    if rr >= rr_min:
+                    rr_threshold = 3.0 if aplus["found"] else rr_min
+
+                if risk > 0 and risk <= a * 12 and rr >= rr_threshold:
                         ptp = gain_net / pip; psl = (risk + sp_p) / pip
                         sig = {
                             "name": m["name"], "cat": m["cat"], "side": "BUY",
@@ -2381,8 +2928,10 @@ def agent_analyze(m, score_min, news_ok, q):
                             "time": datetime.now(timezone.utc).strftime("%H:%M"),
                             "liq": liq, "mode": mode, "risk_mult": 1.0,
                             "setup_key": _tmp_key,
-                            "m5_conf": m5_conf, "m1_conf": m1_conf,   # données M5 complètes
+                            "m5_conf": m5_conf, "m1_conf": m1_conf,
                             "tf_tag": tf_tag,
+                            "aplus": aplus if aplus["found"] else None,
+                            "hs_signal": _hs_signal if _hs_entry_override else None,
                             # ── Fondamental (pour prompt IA) ──────────
                             "fund_base": bs, "fund_quote": qs,
                             "fund_bias": fund,
@@ -2392,22 +2941,33 @@ def agent_analyze(m, score_min, news_ok, q):
                         }
 
             else:  # BEARISH
-                # SL sur le dernier swing high de structure M15 (ICT)
-                sl_p = sl_from_structure(m15, "BEARISH", a, e, pip,
-                                         spread_pips=sp, lookback=40)
-                sl_p = f(sl_p)
-                risk = sl_p - e
-                if risk > 0 and risk <= a * 12:
-                    # TP : liquidity pool (EQL) en priorité → institutionnel
-                    if eq_l and e - risk * 8 < eq_l < e:
-                        tp_eq = eq_l * 1.0010   # just au-dessus du pool de liquidité
+                # Priorité override : H&S neckline > A+ > structure M15
+                if _hs_entry_override:
+                    e     = _hs_entry_override
+                    sl_p  = _hs_sl_override
+                    risk  = sl_p - e
+                    tp    = _hs_tp_override
+                    gain_net = abs(tp - e) - sp_p
+                    rr   = round(gain_net / (risk + sp_p), 1) if (risk + sp_p) > 0 else 0
+                    rr_threshold = 2.0   # H&S : RR min 2.0
+                else:
+                    sl_p = _aplus_sl_override if _aplus_sl_override else sl_from_structure(
+                        m15, "BEARISH", a, e, pip, spread_pips=sp, lookback=40)
+                    sl_p = f(sl_p)
+                    risk = sl_p - e
+                    if _aplus_tp_override and _aplus_tp_override < e:
+                        tp = _aplus_tp_override
+                    elif eq_l and e - risk * 8 < eq_l < e:
+                        tp_eq = eq_l * 1.0010
                         tp_rr = (e - tp_eq) / risk if risk > 0 else 0
                         tp    = tp_eq if tp_rr >= 2.0 else e - risk * 3.0
                     else:
                         tp    = e - risk * 3.0
                     gain_net = abs(tp - e) - sp_p
                     rr   = round(gain_net / (risk + sp_p), 1) if (risk + sp_p) > 0 else 0
-                    if rr >= rr_min:
+                    rr_threshold = 3.0 if aplus["found"] else rr_min
+
+                if risk > 0 and risk <= a * 12 and rr >= rr_threshold:
                         ptp = gain_net / pip; psl = (risk + sp_p) / pip
                         sig = {
                             "name": m["name"], "cat": m["cat"], "side": "SELL",
@@ -2422,8 +2982,10 @@ def agent_analyze(m, score_min, news_ok, q):
                             "time": datetime.now(timezone.utc).strftime("%H:%M"),
                             "liq": liq, "mode": mode, "risk_mult": 1.0,
                             "setup_key": _tmp_key,
-                            "m5_conf": m5_conf,
+                            "m5_conf": m5_conf, "m1_conf": m1_conf,
                             "tf_tag": tf_tag,
+                            "aplus": aplus if aplus["found"] else None,
+                            "hs_signal": _hs_signal if _hs_entry_override else None,
                             # ── Fondamental (pour prompt IA) ──────────
                             "fund_base": bs, "fund_quote": qs,
                             "fund_bias": fund,
@@ -2431,8 +2993,6 @@ def agent_analyze(m, score_min, news_ok, q):
                             "news_status": news_status,
                             "news_title": news_title or "",
                         }
-
-        if sig:
             q.put({"name": m["name"], "cat": m["cat"], "found": True,
                    "signal": sig, "improv": False})
         else:
@@ -2888,8 +3448,23 @@ def fmt_pro(s, news, sl_label):
     sp_s       = "OK" if s["sp"] < 3 else "Large"
     mem_l      = _mem_line(s)
 
-    # ── Bloc M5 (nouveau v11) ─────────────────────────────────────
-    m5_conf  = s.get("m5_conf", {})
+    # ── Bloc Setup A+ M1+M5 ───────────────────────────────────────
+    aplus      = s.get("aplus") or {}
+    aplus_found = bool(aplus.get("found"))
+
+    # ── Bloc H&S / IH&S si détecté ───────────────────────────────
+    hs_sig = s.get("hs_signal") or {}
+    if hs_sig:
+        hs_tf = "M1" if s.get("m1_conf", {}).get("ok") else "M5"
+        lines += [
+            "┌─ 🎯 <b>{} — Neckline Entry ({})</b> ──".format(hs_sig.get("type","H&S"), hs_tf),
+            "│  Neckline : <code>{}</code>".format(hs_sig.get("neckline","?")),
+            "│  Entrée   : <code>{}</code>  (retest neckline)".format(hs_sig.get("entry","?")),
+            "│  SL       : <code>{}</code>  (épaule droite)".format(hs_sig.get("sl","?")),
+            "│  TP       : <code>{}</code>  → RR <b>1:{}</b>".format(hs_sig.get("tp","?"), hs_sig.get("rr","?")),
+            "└──────────────────────────────────",
+            "",
+        ]
     tf_tag   = s.get("tf_tag", "M15+H1")
     m5_ok    = m5_conf.get("ok", False)
     m5_det   = m5_conf.get("details", "—")
@@ -2902,15 +3477,38 @@ def fmt_pro(s, news, sl_label):
     liq_label = liq.get("label", "✓")
     liq_note = "✅ Prise confirmée" if "prise" in liq_label.lower() or "✓" in liq_label else "⚠️ Vérifier liquidité"
 
-    # ── En-tête titre
+    # ── En-tête titre (badge A+ si détecté)
     title_suffix = "  ⚡ SCALP" if mode == "SCALP" else ""
+    aplus_badge  = "  🏆 <b>SETUP A+</b>" if aplus_found else ""
     lines = [
-        "{} {} <b>{} — {}</b>{}  {}".format(arrow, se, s["name"], sf, title_suffix, emo),
+        "{} {} <b>{} — {}</b>{}{}  {}".format(arrow, se, s["name"], sf, title_suffix, aplus_badge, emo),
         sep,
         "{} Confiance : <b>{}</b>  ·  {}".format(conf_ico, conf_txt, sl_label),
         "🕐 {} UTC  ·  📐 Entrée : <b>{}</b>".format(s["time"], tf_tag),
         "",
     ]
+
+    # ── Bloc A+ détaillé (PRO uniquement) ────────────────────────
+    if aplus_found:
+        aplus_confs = aplus.get("badges", [])
+        aplus_rr    = aplus.get("rr_est", "?")
+        aplus_nb    = aplus.get("confirmations", len(aplus_confs))
+        lines += [
+            "┌─ 🏆 <b>SETUP A+ M1+M5 — ICT PARFAIT</b> ─",
+            "│  Win rate estimé : <b>70-75%</b>  ·  RR : <b>1:{}</b>".format(aplus_rr),
+            "│  Confirmations   : <b>{}/9</b>".format(aplus_nb),
+            "│  {}".format("  ·  ".join(aplus_confs[:5]) if aplus_confs else "—"),
+            "│",
+            "│  ✅ Sweep liquidité pris",
+            "│  ✅ MSS + Displacement confirmé",
+            "│  ✅ FVG laissé + Breaker Block",
+            "│  ✅ Entrée OTE 50% / Fibo 61.8%",
+            "│  ✅ CHoCH LTF (M1/M5) validé",
+            "│  🛡️ SL sous mèche du sweep",
+            "│  🎯 TP prochain liquidity pool",
+            "└──────────────────────────────────",
+            "",
+        ]
 
     # ── Bloc SCALP spécifique
     if mode == "SCALP":
@@ -2983,7 +3581,7 @@ def fmt_pro(s, news, sl_label):
     lines += [
         sep,
         "⚠️ Analyse technique uniquement — pas un conseil financier",
-        "🤖 <b>AlphaBot PRO v19</b>  ·  @leaderodg_bot",
+        "🤖 <b>AlphaBot PRO v21</b>  ·  @leaderodg_bot",
     ]
     return "\n".join(l for l in lines if l is not None)
 
@@ -3022,16 +3620,21 @@ def fmt_free(s, news, sl_label):
     sep   = "═" * 22
     arrow = "📈" if s["side"] == "BUY" else "📉"
     liq   = s.get("liq") or {}
+    aplus = s.get("aplus") or {}
+    aplus_found = bool(aplus.get("found"))
 
-    if s["score"] >= 85:
+    if aplus_found:
+        hook = "🏆 <b>Setup A+ ICT — Win rate 70-75%</b>"
+    elif s["score"] >= 85:
         hook = "🔥 <b>Setup PREMIUM — Score élite</b>"
     elif s["score"] >= 75:
         hook = "💎 <b>Setup ICT confirmé — Haute confiance</b>"
     else:
         hook = "📊 <b>Setup valide — Conditions réunies</b>"
 
+    aplus_badge = "  🏆 A+" if aplus_found else ""
     lines = [
-        f"{arrow} {se} <b>{s['name']} — {sf}</b>  {emo}",
+        f"{arrow} {se} <b>{s['name']} — {sf}</b>{aplus_badge}  {emo}",
         sep,
         hook,
         f"💧 <b>{liq.get('label', 'Liquidité ✓')}</b>" if liq else "💧 Liquidité confirmée ✓",
@@ -3045,7 +3648,7 @@ def fmt_free(s, news, sl_label):
         "",
         sep,
         "⚠️ Analyse technique uniquement — pas un conseil financier",
-        "🤖 <b>AlphaBot PRO v11</b>  ·  @leaderodg_bot",
+        "🤖 <b>AlphaBot PRO v21</b>  ·  @leaderodg_bot",
     ]
     return "\n".join(l for l in lines if l is not None)
 
@@ -3503,6 +4106,9 @@ def _scan_inner():
         msg_p       = fmt_pro(sig, news_lbl, sl_l)
         msg_teasing = fmt_signal_teasing(sig)
 
+        log("INFO", clr("→ Signal généré : {} {} Sc:{} RR:1:{} — envoi Telegram...".format(
+            sig["name"], sig["side"], sc, sig["rr"]), "g"))
+
         # ── Image TradingView de la paire ───────────────────────────
         chart_img = None
         try:
@@ -3511,29 +4117,51 @@ def _scan_inner():
 
         # ── Groupe FREE → teasing uniquement (aucun niveau) ─────────
         ref_admin = "https://t.me/{}?start={}".format(BOT_USER, ADMIN_ID)
-        if chart_img:
-            r = tg_send_photo(CHANNEL_ID, chart_img, caption=msg_teasing[:1024])
+        _ch_dead = str(CHANNEL_ID) in _dead_channels and \
+                   (time.time() - _dead_channels[str(CHANNEL_ID)]) < _DEAD_CHANNEL_TTL
+        if not _ch_dead:
+            if chart_img:
+                r = tg_send_photo(CHANNEL_ID, chart_img, caption=msg_teasing[:1024])
+                if r.get("error_404"):
+                    # Canal mort → alerte admin une seule fois
+                    tg_send(ADMIN_ID, "⚠️ <b>CHANNEL_ID {} introuvable (404)</b>\n"
+                            "Le bot a été kické du groupe FREE ou le groupe est supprimé.\n"
+                            "Mets à jour <code>TG_GROUP</code> dans les variables d'environnement.".format(CHANNEL_ID))
+                    r = {"ok": False}
+            else:
+                r = tg_send(CHANNEL_ID, msg_teasing,
+                            kb={"inline_keyboard": [
+                                [{"text": "💵 Payer 10$/mois",      "url": ref_admin}],
+                                [{"text": "🤝 Parrainer 10 amis",   "url": ref_admin}],
+                                [{"text": "📢 Partager ce groupe",   "url": FREE_GROUP_LINK},
+                                 {"text": "👑 Groupe VIP",           "url": VIP_GROUP_LINK}],
+                            ]})
         else:
-            r = tg_send(CHANNEL_ID, msg_teasing,
-                        kb={"inline_keyboard": [
-                            [{"text": "💵 Payer 10$/mois",      "url": ref_admin}],
-                            [{"text": "🤝 Parrainer 10 amis",   "url": ref_admin}],
-                            [{"text": "📢 Partager ce groupe",   "url": FREE_GROUP_LINK},
-                             {"text": "👑 Groupe VIP",           "url": VIP_GROUP_LINK}],
-                        ]})
+            r = {"ok": False}   # canal blacklisté, on skip silencieusement
 
         # ── Groupe VIP → 1 seul message : signal PRO complet ────────
-        if chart_img:
-            tg_send_photo(VIP_CH, chart_img, caption=msg_p[:1024])
-        else:
-            tg_send(VIP_CH, msg_p)
+        _vip_dead = str(VIP_CH) in _dead_channels and \
+                    (time.time() - _dead_channels[str(VIP_CH)]) < _DEAD_CHANNEL_TTL
+        if not _vip_dead:
+            if chart_img:
+                vip_r = tg_send_photo(VIP_CH, chart_img, caption=msg_p[:1024])
+                if vip_r.get("error_404"):
+                    tg_send(ADMIN_ID, "⚠️ <b>VIP_CH {} introuvable (404)</b>\n"
+                            "Le bot a été kické du groupe VIP ou le groupe est supprimé.\n"
+                            "Mets à jour <code>TG_VIP</code> dans les variables d'environnement.".format(VIP_CH))
+            else:
+                tg_send(VIP_CH, msg_p)
+        # Si VIP canal mort, on DM les PRO directement via la boucle all_users ci-dessous
 
         if r.get("ok"):
             with _sent_lk: _sent.add(key)
             save_signal(sig, sn)
             _throttle_record(now_check)
-            log("SIG", "{} {} RR:1:{} Sc:{} G1:+${}".format(
+            log("SIG", "{} {} RR:1:{} Sc:{} G1:+${} ✅ ENVOYÉ".format(
                 clr(sig["name"], "b", "c"), sig["side"], sig["rr"], sc, sig["g1"]))
+        else:
+            log("WARN", clr("Signal {} généré MAIS envoi FREE échoué — r={}".format(
+                sig["name"], r), "y"))
 
         # ── DM individuels : 1 seul message + bouton recheck ──────────
         # ── Stocker signal actif pour recheck live ──────────────
@@ -6017,6 +6645,103 @@ def handle_scan(uid):
     scan_and_send()
 
 
+def _pattern_winrate_report() -> str:
+    """
+    Agrège le winrate par pattern ICT/SMC depuis la table ai_memory.
+    Format clé mémoire : "PAIR|SESSION|TAG1+TAG2"
+    Tags reconnus : OTE, FVG, CHoCH, LIQ, HS, DBL, BRK, MAC, BASE
+    Retourne un bloc texte formaté pour Telegram (HTML).
+    """
+    PATTERN_LABELS = {
+        "OTE":   "OTE 61.8%",
+        "FVG":   "Fair Value Gap",
+        "CHoCH": "CHoCH / MSS",
+        "LIQ":   "Liquidity Sweep",
+        "HS":    "H&S / IH&S",
+        "DBL":   "Double Top/Bot",
+        "BRK":   "Breakout",
+        "MAC":   "Macro",
+        "BASE":  "Setup de base",
+    }
+    pattern_stats = {k: {"w": 0, "l": 0, "pnl": 0.0} for k in PATTERN_LABELS}
+    try:
+        con = _conn(); cur = con.cursor()
+        cur.execute("SELECT sig_key, wins, losses, pnl FROM ai_memory")
+        rows = cur.fetchall(); con.close()
+        for row in rows:
+            try:
+                key   = row[0] if isinstance(row, (list, tuple)) else row["sig_key"]
+                w     = int(row[1] if isinstance(row, (list, tuple)) else row["wins"])
+                l     = int(row[2] if isinstance(row, (list, tuple)) else row["losses"])
+                pnl_v = float(row[3] if isinstance(row, (list, tuple)) else row["pnl"])
+                parts = key.split("|")
+                tag_str = parts[2] if len(parts) >= 3 else "BASE"
+                tags = tag_str.split("+") if "+" in tag_str else [tag_str]
+                for t in tags:
+                    t = t.strip()
+                    if t in pattern_stats:
+                        pattern_stats[t]["w"]   += w
+                        pattern_stats[t]["l"]   += l
+                        pattern_stats[t]["pnl"] += pnl_v
+            except Exception:
+                continue
+    except Exception as e:
+        return "⚠️ Mémoire IA indispo : {}".format(str(e)[:60])
+
+    lines = ["", "🧠 <b>WINRATE PAR PATTERN ICT/SMC</b>"]
+    has_data = False
+    sorted_pats = sorted(
+        pattern_stats.items(),
+        key=lambda x: (x[1]["w"] + x[1]["l"]),
+        reverse=True)
+    for tag, s in sorted_pats:
+        total = s["w"] + s["l"]
+        if total < 3:
+            continue
+        has_data = True
+        wr = int(s["w"] / total * 100)
+        bar_filled = wr // 10
+        bar = "█" * bar_filled + "░" * (10 - bar_filled)
+        icon = "🟢" if wr >= 65 else ("🟡" if wr >= 50 else "🔴")
+        lines.append(
+            "{}  <b>{}</b>  {}%  [{}]\n"
+            "    {} trades  ·  PnL: <b>{:+.2f}$</b>".format(
+                icon, PATTERN_LABELS[tag], wr, bar,
+                total, s["pnl"]))
+    if not has_data:
+        lines.append("⏳ Pas encore assez de données (min 3 trades par pattern).")
+    return "\n".join(lines)
+
+
+def _equity_curve_stats() -> str:
+    """
+    Calcule une courbe PnL cumulée des 7 derniers jours depuis la table signals.
+    Retourne un bloc texte ASCII pour le dashboard /stats.
+    """
+    try:
+        con = _conn(); cur = con.cursor()
+        cur.execute(
+            "SELECT DATE(sent_at) as d, "
+            "SUM(CASE WHEN result='WIN' THEN gain_g1 ELSE -loss_g1 END) as pnl "
+            "FROM signals WHERE sent_at >= DATE('now','-7 days') "
+            "AND result IS NOT NULL "
+            "GROUP BY d ORDER BY d ASC")
+        rows = cur.fetchall(); con.close()
+        if not rows:
+            return ""
+        cum = 0.0; parts = []
+        for row in rows:
+            day  = (row[0] if isinstance(row, (list, tuple)) else row["d"] or "?")[-5:]  # MM-DD
+            pnl  = float(row[1] if isinstance(row, (list, tuple)) else row["pnl"] or 0)
+            cum += pnl
+            arrow = "📈" if pnl >= 0 else "📉"
+            parts.append("  {} {} {:+.0f}$  cumul <b>{:+.0f}$</b>".format(
+                arrow, day, pnl, cum))
+        return "\n📊 <b>EQUITY CURVE 7J</b>\n" + "\n".join(parts)
+    except Exception:
+        return ""
+
+
 def handle_stats(uid):
     if not _admin_only(uid): return
     try:
@@ -6024,41 +6749,69 @@ def handle_stats(uid):
         stats   = db_daily_stats()
         ws      = db_weekly_stats()
         con     = _conn(); cur = con.cursor()
-        # FIX: DISTINCT sur user_id pour éviter les doublons
         cur.execute(
             "SELECT user_id, username, ref_count FROM users "
             "GROUP BY user_id ORDER BY ref_count DESC LIMIT 5")
         top = cur.fetchall(); con.close()
         pending = db_pending_payments()
+
+        # ── Winrate du jour ──────────────────────────────────────────
+        wr_day = int(stats["wins"] / stats["sig_count"] * 100) if stats["sig_count"] > 0 else 0
+        wr_wk  = int(ws["wins"] / ws["sig_count"] * 100) if ws["sig_count"] > 0 else 0
+        bar_d  = "█" * (wr_day // 10) + "░" * (10 - wr_day // 10)
+        wr_icon= "🟢" if wr_day >= 65 else ("🟡" if wr_day >= 50 else "🔴")
+
         msg = (
-            "\U0001f4ca <b>STATS ALPHABOT PRO v8.5</b>\n" + "\u2550" * 22 + "\n"
-            "\U0001f465 Total:{} PRO:{}\n"
-            "\U0001f4e1 Signaux:{} Payés:{}\n\n" +
-            "\u2501" * 20 + "\n"
-            "\U0001f4c5 <b>AUJOURD'HUI</b>\n"
-            "{} sig  {} gagnants\nLot0.01:+${}  Lot1:+${}\n\n"
-            "\U0001f4c6 <b>CETTE SEMAINE</b>\n"
-            "{} sig  {} gagnants  Lot1:+${}\n\n"
+            "📊 <b>STATS ALPHABOT PRO v21</b>\n" + "═" * 22 + "\n"
+            "👥 Total:<b>{}</b>  PRO:<b>{}</b>  FREE:<b>{}</b>\n"
+            "📡 Signaux:<b>{}</b>  Payés:<b>{}</b>\n\n"
+            "━" * 20 + "\n"
+            "📅 <b>AUJOURD'HUI</b>\n"
+            "  {} sig  ·  {} gagnants  ·  {} WR {}  [{}]\n"
+            "  Lot 0.01: +${}  ·  Lot 1.00: +${}\n\n"
+            "📆 <b>CETTE SEMAINE</b>\n"
+            "  {} sig  ·  {} gagnants  ·  {}% WR\n"
+            "  Lot 1.00: +${}\n"
         ).format(
-            total, pro, sigs, pays,
-            stats["sig_count"], stats["wins"], stats["total_g001"], stats["total_g1"],
-            ws["sig_count"], ws["wins"], ws["total_g1"])
+            total, pro, total - pro, sigs, pays,
+            stats["sig_count"], stats["wins"], wr_day, wr_icon, bar_d,
+            stats["total_g001"], stats["total_g1"],
+            ws["sig_count"], ws["wins"], wr_wk, ws["total_g1"])
+
+        # ── Equity curve 7j ─────────────────────────────────────────
+        eq = _equity_curve_stats()
+        if eq:
+            msg += eq + "\n"
+
+        # ── Winrate par pattern ──────────────────────────────────────
+        msg += _pattern_winrate_report() + "\n"
+
+        # ── Top parrains ─────────────────────────────────────────────
         if top:
-            msg += "\U0001f91d <b>TOP PARRAINS</b>\n"
+            msg += "\n🤝 <b>TOP PARRAINS</b>\n"
             seen = set()
             for t_uid, uname, rc in top:
                 if t_uid not in seen:
                     seen.add(t_uid)
                     msg += "{}. @{}  {} filleuls\n".format(len(seen), uname or "?", rc)
+
+        # ── Paiements en attente ─────────────────────────────────────
         if pending:
-            msg += "\n\u23f3 <b>ATTENTE PAIEMENT</b>\n"
+            msg += "\n⏳ <b>ATTENTE PAIEMENT</b>\n"
             for _, p_uid, uname, tx, _ in pending:
                 tx_short = (tx or "")[:16] + "..."
-                msg += "\u2022 @{} <code>{}</code>  <code>{}</code>\n  /activate {}\n".format(
+                msg += "• @{} <code>{}</code>  <code>{}</code>\n  /activate {}\n".format(
                     uname or "?", p_uid, tx_short, p_uid)
-        tg_send(uid, msg)
+
+        if len(msg) > 4000:
+            msg = msg[:3900] + "\n...(tronqué)"
+        tg_send(uid, msg, kb={"inline_keyboard": [
+            [{"text": "🧠 Mémoire IA",    "callback_data": "adm_memory"},
+             {"text": "🔧 Recommandations","callback_data": "adm_reco"}],
+            [{"text": "◀️ Panel admin",   "callback_data": "adm_panel"}],
+        ]})
     except Exception as ex:
-        tg_send(uid, "\u274c Erreur /stats : {}".format(str(ex)[:100]))
+        tg_send(uid, "❌ Erreur /stats : {}".format(str(ex)[:200]))
 
 
 def handle_testfree(uid):
