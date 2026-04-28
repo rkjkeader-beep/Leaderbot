@@ -1,6 +1,4 @@
 
-
-
 #!/usr/bin/env python3
 """
 AlphaBot PRO v19 — Agent IA Adaptatif + Validateur Dual-AI
@@ -108,7 +106,7 @@ PAIR_MAX_LEV = {"BTCUSDT":125,"ETHUSDT":100,"SOLUSDT":50,"BNBUSDT":75,"XRPUSDT":
 
 # Clé API Claude (var d'env prioritaire)
 CLAUDE_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "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")
-CLAUDE_MODEL     = "claude-sonnet-4-5"
+CLAUDE_MODEL     = "claude-sonnet-4-5-20250514"
 CLAUDE_TOKENS    = 600
 
 # Clé API Gemini (var d'env prioritaire)
@@ -2497,12 +2495,6 @@ _admin_test_mode   = ""
 _last_scan_results = []
 _payment_state     = _pay_state
 _broadcast_pending = {}    # partagé avec _bcast_pending
-# ── Store signaux actifs (pour bouton vérification) ─────────────────────────
-# Clé = "PAIR-SIDE" (ex: "XAUUSD-BUY"), valeur = dict signal complet
-_ACTIVE_SIGNALS = {}   # {pair_side_key: sig_dict}
-_ACTIVE_SIGNALS_LOCK = threading.Lock()
-_PAIR_LAST_SIGNAL = {}  # {pair: date_str} — 1 signal par paire par jour strict
-
 
 # ── Throttle global signaux ──────────────────────────────────────
 _sig_timestamps    = deque()   # timestamps UTC des signaux envoyés (glissant 24h)
@@ -2976,6 +2968,23 @@ def _group_invite_msg(pro=False):
                                  [{"text":"💎 Devenir PRO","callback_data":"pay"}],
                                  [{"text":"◀️ Retour","callback_data":"start"}]]}
 
+def send_welcome(uid, uname):
+    db_register(uid, uname, tg_fn=tg_send)
+    p = is_pro(uid); ch = chal_get()
+    plan = get_plan(uid)
+    tg_sticker(uid, STK_W)
+    tg_send(uid,
+        "🤖 <b>AlphaBot PRO v17 — Agent IA Adaptatif</b>\n"+"═"*22+"\n\n"
+        "📡 20 marchés : Forex · Or · BTC · Indices · Pétrole\n"
+        "🧠 ICT/SMC · Tendance H1 · Entrée M5/M15\n"
+        "🌍 Régime: <b>{}</b>  ·  Challenge: <b>{:.4f}$</b>\n\n"
+        "✅ Plan: <b>{}</b>\n\nSélectionne une option ↓".format(
+            AI_REG.get("regime","?"), ch["balance"], plan),
+        kb=kb_main(p))
+    # Invitation groupe après le welcome (délai 2s)
+    time.sleep(2)
+    inv_msg, inv_kb = _group_invite_msg(p)
+    tg_send(uid, inv_msg, kb=inv_kb)
 
 def send_account(uid,uname,forced=None):
     plan=forced or get_plan(uid); _,exp,_=get_pro_info(uid)
@@ -3024,130 +3033,22 @@ def send_challenge(uid):
             chal_prog(ch),w,l,wr,ch.get("today_pnl",0),ch["am_cycle"],open_t,MAX_OPEN,
             reg.get("regime","?"),reg.get("label","?")),kb=kb_back())
 
-def _claude_rapport_analyse(trades_today, trades_week):
-    """Analyse les vrais trades avec Claude AI et génère un rapport."""
-    if not _ANTHROPIC_OK or not CLAUDE_API_KEY:
-        return None
-    try:
-        def fmt_trade(t):
-            pair  = t[0]; side = t[1]; rr = t[2]
-            g001  = t[3]; g1   = t[4]; l001 = t[5]; l1 = t[6]
-            entry = t[8]  if len(t) > 8 else "?"
-            tp    = t[9]  if len(t) > 9 else "?"
-            sl    = t[10] if len(t) > 10 else "?"
-            result = "TP ATTEINT (+${:.0f} lot1)".format(g1) if rr >= 3.0 \
-                     else "SL TOUCHE (-${:.0f} lot1)".format(l1)
-            return "  * {} {} | Entree:{} TP:{} SL:{} | RR 1:{} | {}".format(
-                pair, side, entry, tp, sl, rr, result)
-
-        today_lines = [fmt_trade(t) for t in trades_today] if trades_today \
-                      else ["  Aucun trade aujourd'hui"]
-        week_lines  = [fmt_trade(t) for t in trades_week]  if trades_week  \
-                      else ["  Aucun trade cette semaine"]
-
-        prompt = (
-            "Tu es l'analyste senior d'AlphaBot PRO, un bot de signaux ICT/SMC.\n\n"
-            "Voici les VRAIS trades realises aujourd'hui :\n"
-            + "\n".join(today_lines) +
-            "\n\nVoici les trades de la semaine (7 derniers jours) :\n"
-            + "\n".join(week_lines) +
-            "\n\nTa mission :\n"
-            "1. Analyse la PERFORMANCE reelle (winrate, gains/pertes nets)\n"
-            "2. Identifie les PATTERNS : quelles paires/sessions ont le mieux fonctionne ?\n"
-            "3. Donne 2-3 ENSEIGNEMENTS cles tires de ces trades\n"
-            "4. Propose 1 RECOMMANDATION concrete pour demain\n\n"
-            "Format: texte HTML Telegram (<b>bold</b>, <i>italic</i>)\n"
-            "Sois concis, professionnel, factuel. Maximum 400 mots.\n"
-            "Commence directement par l'analyse sans preambule."
-        )
-
-        client = _anthropic_sdk.Anthropic(api_key=CLAUDE_API_KEY)
-        resp = client.messages.create(
-            model=CLAUDE_MODEL, max_tokens=800,
-            messages=[{"role": "user", "content": prompt}])
-        return resp.content[0].text.strip()
-    except Exception as e:
-        _LAI.error("Claude rapport: {}".format(e))
-        return None
-
 def send_rapports(uid):
-    """Rapport de performance base sur vrais trades, analyse par Claude AI."""
-    tg_send(uid, "\U0001f9e0 <b>Analyse IA en cours...</b>\n\u23f3 Claude analyse tes vrais trades...")
-    st  = daily_stats()
-    ws  = weekly_stats()
-    sd  = st["n"];  wd_ = st["wins"]
-    sw  = ws["n"];  ww  = ws["wins"]
-    wr_d = int(wd_ / sd * 100) if sd else 0
-    wr_w = int(ww  / sw * 100) if sw else 0
-
-    trades_today = st.get("rows", [])
-    trades_week  = ws.get("rows", [])
-
-    sep = "\u2550" * 22
-    lines = [
-        "\U0001f4c8 <b>RAPPORT DE PERFORMANCE</b>",
-        sep, "",
-        "\U0001f4c5 <b>AUJOURD'HUI</b>",
-    ]
-    if sd > 0:
-        perf = "\U0001f525" if wr_d >= 70 else "\u2705" if wr_d >= 50 else "\u26a0\ufe0f"
-        lines += [
-            "  {} {} signaux  \u00b7  {} \u2705  \u00b7  {} \u274c  \u00b7  <b>{}% reussite</b>".format(
-                perf, sd, wd_, sd - wd_, wr_d),
-            "  \U0001f4b5 Lot 0.01 : <b>+${}</b>".format(st["g001"]),
-            "  \U0001f4b0 Lot 1.00 : <b>+${}</b> \U0001f525".format(st["g1"]),
-            "", "\U0001f4cb <b>Detail trades :</b>",
-        ]
-        for row in trades_today:
-            pair  = row[0]; side = row[1]; rr = row[2]
-            g001  = row[3]; g1   = row[4]; l001 = row[5]; l1 = row[6]
-            entry = row[8]  if len(row) > 8  else "\u2014"
-            tp    = row[9]  if len(row) > 9  else "\u2014"
-            sl    = row[10] if len(row) > 10 else "\u2014"
-            ok   = rr >= 3.0
-            d    = "\u2b06\ufe0f" if side == "BUY" else "\u2b07\ufe0f"
-            g_l1 = "+${:.0f}".format(g1) if ok else "-${:.0f}".format(l1)
-            g_l001 = "+${:.2f}".format(g001) if ok else "-${:.2f}".format(l001)
-            lines.append("{} <b>{}</b> {} {} \u2014 RR <b>1:{}</b>  {}".format(
-                "\U0001f7e2" if ok else "\U0001f534", pair, d, side, rr, g_l1))
-            lines.append("  \U0001f4cd E:<code>{}</code> TP:<code>{}</code> SL:<code>{}</code>".format(
-                entry, tp, sl))
-            lines.append("  \U0001f4b5 Lot 0.01: <b>{}</b>  \u00b7  Lot 1.00: <b>{}</b>".format(
-                g_l001, g_l1))
-            lines.append("")
-    else:
-        lines.append("  \u23f3 Aucun signal envoye aujourd'hui")
-
-    lines += ["", "\u2501" * 20, "", "\U0001f4c6 <b>CETTE SEMAINE</b>"]
-    if sw > 0:
-        perf_w = "\U0001f525" if wr_w >= 70 else "\u2705" if wr_w >= 50 else "\u26a0\ufe0f"
-        lines += [
-            "  {} {} signaux  \u00b7  {} \u2705  \u00b7  <b>{}% reussite</b>".format(
-                perf_w, sw, ww, wr_w),
-            "  \U0001f4b5 Lot 0.01 : <b>+${}</b>".format(ws["g001"]),
-            "  \U0001f4b0 Lot 1.00 : <b>+${}</b>".format(ws["g1"]),
-        ]
-    else:
-        lines.append("  \u23f3 Aucun signal cette semaine")
-
-    # ── Analyse Claude AI ────────────────────────────────────────
-    if (sd > 0 or sw > 0) and CLAUDE_API_KEY:
-        ai_txt = _claude_rapport_analyse(trades_today, trades_week)
-        if ai_txt:
-            lines += [
-                "", sep,
-                "\U0001f9e0 <b>ANALYSE IA \u2014 CLAUDE</b>",
-                "\u2501" * 20, "",
-                ai_txt,
-            ]
-
-    lines += [
-        "", sep,
-        "\u26a0\ufe0f Estimations si TP atteint. Not financial advice.",
-        "\U0001f916 <b>AlphaBot PRO</b>  \u00b7  @leaderodg_bot",
-    ]
-    tg_send(uid, "\n".join(l for l in lines if l is not None), kb=kb_back())
-
+    st=daily_stats(); ws=weekly_stats()
+    sd=st["n"]; wd_=st["wins"]; wr_d=int(wd_/sd*100) if sd else 0
+    sw=ws["n"]; ww=ws["wins"]; wr_w=int(ww/sw*100) if sw else 0
+    lines=["📈 <b>RAPPORTS DE PERFORMANCE</b>","═"*22,"","🔥 <b>AUJOURD'HUI</b>",""]
+    if sd>0:
+        lines+=["📡 {} signaux  ·  {} ✅  ·  {}% réussite".format(sd,wd_,wr_d),
+                "💵 Lot 0.01: <b>+${}</b>".format(st["g001"]),
+                "💰 Lot 1.00: <b>+${}</b>".format(st["g1"]),
+                "" if improv_cnt else "",""]
+    else: lines.append("⏳ Aucun signal aujourd'hui")
+    lines+=["","━"*20,"","🔥🔥 <b>CETTE SEMAINE</b>",""]
+    if sw>0: lines+=["📡 {} signaux  ·  {} ✅  ·  {}% réussite".format(sw,ww,wr_w),"💵 +${}  ·  💰 +${}".format(ws["g001"],ws["g1"])]
+    else: lines.append("⏳ Aucun signal cette semaine")
+    lines+=["","═"*22,"⚠️ Estimations si TP atteint. Not financial advice.","🤖 AlphaBot PRO  ·  @leaderodg_bot"]
+    tg_send(uid,"\n".join(l for l in lines if l is not None),kb=kb_back())
 
 def send_admin_full(uid):
     if uid!=ADMIN_ID: tg_send(uid,"❌ Accès refusé."); return
@@ -3312,25 +3213,7 @@ def _build_promo_text(promo_id):
 
 
 def _check_open_signals():
-    """Vérifie si les signaux ouverts ont atteint TP ou SL + nettoie les signaux actifs > 4h."""
-    # Nettoyage _ACTIVE_SIGNALS > 4h
-    try:
-        now = datetime.now(timezone.utc)
-        with _ACTIVE_SIGNALS_LOCK:
-            expired_keys = []
-            for k, s in _ACTIVE_SIGNALS.items():
-                ts_str = s.get("_ts", "")
-                if not ts_str:
-                    s["_ts"] = now.isoformat()
-                    continue
-                try:
-                    age_h = (now - datetime.fromisoformat(ts_str.replace("Z",""))).total_seconds()/3600
-                    if age_h > 4:
-                        expired_keys.append(k)
-                except: pass
-            for k in expired_keys:
-                _ACTIVE_SIGNALS.pop(k, None)
-    except: pass
+    """Vérifie si les signaux ouverts ont atteint TP ou SL."""
     try:
         open_sigs = db_get_open_signals()
         if not open_sigs: return
@@ -3388,69 +3271,65 @@ def _do_backup():
 
 
 def _fmt_daily_report(stats):
-    """Rapport quotidien avec analyse Claude AI basée sur vrais trades."""
     date_fr = datetime.strptime(stats["date"], "%Y-%m-%d").strftime("%d/%m/%Y")
     sc = stats["sig_count"]; w = stats["wins"]; l = stats.get("losses", sc - w)
     if sc == 0:
-        return "📊 <b>RAPPORT DU JOUR — AlphaBot PRO</b>\n" + "═"*22 + "\n\n📅 {}\n\n⏳ Aucun signal envoyé aujourd\'hui.\n\n⚠️ Not financial advice · @leaderodg_bot".format(date_fr)
-
+        return "\U0001f4ca <b>RAPPORT {}</b>\n\nAucun signal aujourd'hui.".format(date_fr)
     wr   = int(w / sc * 100)
+    perf = "\U0001f525\U0001f525" if stats["total_g1"] > 2000 else \
+           "\U0001f525" if stats["total_g1"] > 1000 else "\U0001f4b0"
+
+    # Estimations par taille de lot
     g_001 = stats["total_g001"]
     g_01  = round(g_001 * 10, 2)
     g_1   = stats["total_g1"]
-    perf_icon = "🔥🔥" if g_1 > 2000 else "🔥" if g_1 > 1000 else "💰"
 
     lines = [
-        "📊 <b>RAPPORT DU JOUR — AlphaBot PRO</b> {}".format(perf_icon),
-        "═" * 22,
-        "📅 {}  ·  Session fermée".format(date_fr), "",
-        "🎯 <b>BILAN GLOBAL</b>",
-        "  ✅ TP : <b>{}</b>  |  ❌ SL : <b>{}</b>  |  <b>{}%</b> réussite".format(w, l, wr),
+        "\U0001f4af <b>RAPPORT DU JOUR \u2014 AlphaBot PRO</b> {}".format(perf),
+        "\u2550" * 22,
+        "\U0001f4c5 {}  \u00b7  Session fermée".format(date_fr), "",
+        "\U0001f3af <b>BILAN GLOBAL</b>",
+        "  \u2705 TP : <b>{}</b>  |  \u274c SL : <b>{}</b>  |  <b>{}%</b> réussite".format(w, l, wr),
         "",
-        "💰 <b>GAINS RÉELS :</b>",
+        "\U0001f4b0 <b>ESTIMATIONS DE GAINS :</b>",
         "  Lot 0.01 → <b>+${}</b>".format(g_001),
         "  Lot 0.10 → <b>+${}</b>".format(g_01),
         "  Lot 1.00 → <b>+${}</b> 🔥".format(g_1),
-        "", "━" * 22,
-        "📋 <b>DÉTAIL COMPLET DES TRADES</b>", ""
+        "", "\u2501" * 22,
+        "\U0001f4cb <b>DÉTAIL DES TRADES</b>", ""
     ]
 
     for row in stats["rows"]:
-        pair  = row[0]; side = row[1]; rr   = row[2]
-        g001  = row[3]; g1   = row[4]; l001 = row[5]; l1 = row[6]
-        entry = row[8]  if len(row) > 8  else "—"
-        tp    = row[9]  if len(row) > 9  else "—"
-        sl    = row[10] if len(row) > 10 else "—"
-        ok    = rr >= 3.0
-        d     = "⬆️" if side == "BUY" else "⬇️"
-        sf    = "ACHAT" if side == "BUY" else "VENTE"
-        g_lot1 = "+${:.0f}".format(g1) if ok else "-${:.0f}".format(l1)
-        g_lot001 = "+${:.2f}".format(g001) if ok else "-${:.2f}".format(l001)
-        lines.append("{} <b>{}</b>  {} {}  —  RR <b>1:{}</b>".format(
-            "🟢" if ok else "🔴", pair, d, sf, rr))
-        lines.append("  {} — <b>{}</b> (lot 1.00)".format(
-            "✅ TP ATTEINT" if ok else "❌ SL TOUCHÉ", g_lot1))
-        lines.append("  📍 Entrée : <code>{}</code>  ✅ TP : <code>{}</code>  ❌ SL : <code>{}</code>".format(entry, tp, sl))
-        lines.append("  💵 Lot 0.01 : <b>{}</b>  ·  Lot 1.00 : <b>{}</b>".format(g_lot001, g_lot1))
+        pair    = row[0]; side = row[1]; rr   = row[2]
+        g001    = row[3]; g1   = row[4]; l001 = row[5]; l1 = row[6]
+        entry   = row[8]  if len(row) > 8  else "—"
+        tp      = row[9]  if len(row) > 9  else "—"
+        sl      = row[10] if len(row) > 10 else "—"
+        ok      = rr >= 3.0
+        d       = "\u2b06\ufe0f" if side == "BUY" else "\u2b07\ufe0f"
+        sf      = "ACHAT" if side == "BUY" else "VENTE"
+        outcome = "\u2705 TP ATTEINT" if ok else "\u274c SL TOUCHÉ"
+        gain_lot001 = "+${:.2f}".format(g001) if ok else "-${:.2f}".format(l001)
+        gain_lot1   = "+${:.0f}".format(g1)   if ok else "-${:.0f}".format(l1)
+
+        lines.append("{} <b>{}</b>  {} {}  \u2014  RR <b>1:{}</b>".format(
+            "\U0001f7e2" if ok else "\U0001f534", pair, d, sf, rr))
+        lines.append("  {} {}".format(outcome, gain_lot1 + " (lot 1.00)"))
+        lines.append("  \U0001f4cd Entrée : <code>{}</code>".format(entry))
+        lines.append("  \u2705 TP     : <code>{}</code>".format(tp))
+        lines.append("  \u274c SL     : <code>{}</code>".format(sl))
+        lines.append("  \U0001f4b5 Lot 0.01 : <b>{}</b>  \u00b7  Lot 1.00 : <b>{}</b>".format(
+            gain_lot001, gain_lot1))
         lines.append("")
 
-    # ── Analyse Claude AI des vrais trades ──────────────────────────────
-    ai_analysis = _claude_rapport_analyse(stats.get("rows",[]), [])
-    if ai_analysis:
-        lines += [
-            "═" * 22,
-            "🧠 <b>ANALYSE IA — CLAUDE</b>",
-            "━" * 20, "",
-            ai_analysis,
-        ]
-
     lines += [
-        "", "═" * 22,
-        "💰 <b>Total du jour :</b>",
-        "  Lot 0.01 : <b>+${}</b>  ·  Lot 0.10 : <b>+${}</b>  ·  Lot 1.00 : <b>+${}</b>".format(g_001, g_01, g_1),
+        "\u2550" * 22,
+        "\U0001f4b0 <b>Total estimé :</b>",
+        "  Lot 0.01 : <b>+${}</b>  \u00b7  Lot 0.10 : <b>+${}</b>  \u00b7  Lot 1.00 : <b>+${}</b>".format(
+            g_001, g_01, g_1),
         "",
-        "📩 /ref — Parraine tes amis = PRO GRATUIT !",
-        "⚠️ Not financial advice  ·  Risk 1% max  ·  @leaderodg_bot"
+        "\U0001f4e9 /ref \u2014 Parraine tes amis = PRO GRATUIT !",
+        "\u26a0\ufe0f Not financial advice  \u00b7  Risk 1% max  \u00b7  @leaderodg_bot"
     ]
     return "\n".join(lines)
 
@@ -3709,17 +3588,12 @@ def _scan_and_send_inner():
     _last_scan_results = results
     cleanup_sent(date_str)
 
-    # Clé = PAIR uniquement (pas le sens) → 1 seul signal par paire par jour strict
-    # Ex: "XAUUSD-2025-01-15" — si BUY envoyé, on bloque aussi SELL sur XAUUSD aujourd'hui
+    # Clé sans hour_str → 1 seul signal par paire/sens par JOUR (pas par heure)
     sigs_raw = [(r["signal"],
-                 "{}-{}".format(r["signal"]["name"], date_str))
+                 "{}-{}-{}".format(r["signal"]["name"], r["signal"]["side"], date_str))
                 for r in results if r["found"]]
     with _sent_lock:
         sigs_raw = [(s, k) for s, k in sigs_raw if k not in _sent]
-    # Dédup supplémentaire via _PAIR_LAST_SIGNAL (résistant au redémarrage)
-    with _ACTIVE_SIGNALS_LOCK:
-        sigs_raw = [(s, k) for s, k in sigs_raw
-                    if _PAIR_LAST_SIGNAL.get(s.get("name","")) != date_str]
     sigs_raw.sort(key=lambda x: -x[0]["score"])
 
     # ── ✨ Validation Claude AI (Risk Manager) ────────────────────────
@@ -3780,22 +3654,8 @@ def _scan_and_send_inner():
                      {"text": "👑 Groupe VIP",           "url": VIP_GROUP_LINK}],
                 ]})
 
-        # ── Stocker signal actif (pour bouton vérification) ─────────
-        pair_side_key = "{}-{}".format(sig.get("name",""), sig.get("side",""))
-        sig["_check_key"] = pair_side_key
-        sig["_ts"] = datetime.now(timezone.utc).isoformat()
-        with _ACTIVE_SIGNALS_LOCK:
-            _ACTIVE_SIGNALS[pair_side_key] = dict(sig)
-            _PAIR_LAST_SIGNAL[sig.get("name","")] = date_str
-
-        # ── Bouton "Vérifier signal" pour messages PRO ───────────────
-        kb_check = {"inline_keyboard": [[
-            {"text": "🔍 Vérifier si signal valide",
-             "callback_data": "check_sig_{}".format(pair_side_key)},
-        ]]}
-
-        # ── Groupe VIP → message PRO + bouton vérification ──────────
-        tg_send(VIP_CH, msg_pro, kb=kb_check)
+        # ── Groupe VIP → 1 seul message PRO complet ─────────────────
+        tg_send(VIP_CH, msg_pro)
 
         # ── Enregistrement signal ────────────────────────────────────
         with _sent_lock: _sent.add(key)
@@ -3806,10 +3666,10 @@ def _scan_and_send_inner():
             clr(sig["name"], "bold", "white"), sc_txt,
             sig["rr"], sig["score"], sig.get("score_min", "?"), sig["g1"]))
 
-        # ── DM individuels PRO : message + bouton vérification ──────
+        # ── DM individuels : 1 message, sans sticker ─────────────────
         for puid in pro_users_eff:
             if db_count_today(puid) < PRO_LIMIT:
-                tg_send(puid, msg_pro, kb=kb_check)
+                tg_send(puid, msg_pro)
                 db_count_increment(puid)
                 time.sleep(0.04)
 
@@ -6449,190 +6309,6 @@ def dispatch(uid, uname, txt):
     send_welcome(uid, uname)
 
 
-
-# ══════════════════════════════════════════════════════════════════
-#  ✅ VÉRIFICATION SIGNAL EN TEMPS RÉEL
-#  Bouton "🔍 Vérifier signal" → prix live + entrée mise à jour
-# ══════════════════════════════════════════════════════════════════
-
-def _get_live_price(pair_name):
-    """Récupère le prix actuel d'une paire via Yahoo Finance."""
-    mkt = next((m for m in MARKETS if m["name"] == pair_name), None)
-    if not mkt: return None
-    try:
-        c = fetch_c(mkt["sym"], "5m", "1d")
-        if c and len(c) >= 1:
-            return c[-1]["c"], c
-    except: pass
-    return None, None
-
-
-def _signal_still_valid(sig, current_price):
-    """
-    Vérifie si le signal est encore valide :
-    - Prix n'a pas touché SL
-    - Prix n'a pas dépassé TP
-    - Signal < 4h (sinon expiré)
-    """
-    side  = sig.get("side","BUY")
-    entry = float(sig.get("entry", 0))
-    tp    = float(sig.get("tp", 0))
-    sl    = float(sig.get("sl", 0))
-    price = float(current_price)
-
-    if side == "BUY":
-        if price <= sl:   return "SL_HIT",  "❌ SL touché — signal invalidé"
-        if price >= tp:   return "TP_HIT",  "✅ TP atteint — signal terminé"
-        if price < entry: return "VALID_PULLBACK", "✅ Valide — prix en pullback vers entrée"
-        return "VALID_RUNNING", "🟢 En cours — prix au-dessus de l'entrée"
-    else:  # SELL
-        if price >= sl:   return "SL_HIT",  "❌ SL touché — signal invalidé"
-        if price <= tp:   return "TP_HIT",  "✅ TP atteint — signal terminé"
-        if price > entry: return "VALID_PULLBACK", "✅ Valide — prix en pullback vers entrée"
-        return "VALID_RUNNING", "🟢 En cours — prix en dessous de l'entrée"
-
-
-def _adjust_entry_sl(sig, candles, current_price):
-    """
-    Recalcule l'entrée et le SL optimaux selon le prix actuel.
-    Ne change PAS le TP (objectif institutionnel).
-    """
-    side  = sig.get("side","BUY")
-    pip   = sig.get("pip", 0.0001)
-    a     = atr(candles) if candles and len(candles) >= 14 else None
-    entry = float(current_price)
-
-    if a:
-        if side == "BUY":
-            new_sl = round(entry - a * 1.2, 5)
-        else:
-            new_sl = round(entry + a * 1.2, 5)
-    else:
-        # Fallback : garder distance SL originale
-        orig_dist = abs(float(sig.get("entry",0)) - float(sig.get("sl",0)))
-        new_sl = round(entry - orig_dist, 5) if side=="BUY" else round(entry + orig_dist, 5)
-
-    return round(entry, 5), new_sl
-
-
-def handle_check_signal(uid, pair_side_key):
-    """
-    Handler bouton 'Vérifier signal'.
-    Récupère le prix live, analyse la validité, propose nouvelle entrée/SL si valide.
-    """
-    with _ACTIVE_SIGNALS_LOCK:
-        sig = _ACTIVE_SIGNALS.get(pair_side_key)
-    if not sig:
-        tg_send(uid, "⏳ <b>Signal expiré ou introuvable.</b>\n\nLe signal n'est plus en mémoire (>4h).")
-        return
-
-    pair  = sig.get("name","?")
-    side  = sig.get("side","BUY")
-    entry = sig.get("entry","?")
-    tp    = sig.get("tp","?")
-    sl    = sig.get("sl","?")
-    rr    = sig.get("rr","?")
-    sc    = sig.get("score", 0)
-    tg_send(uid, "🔄 <b>Vérification en cours...</b>\n📡 Récupération prix live {}...".format(pair))
-
-    result = _get_live_price(pair)
-    current, candles = result if isinstance(result, tuple) else (result, None)
-    if not current:
-        tg_send(uid, "❌ <b>Prix indisponible</b>\n\nImpossible de récupérer le prix live de {}.\nRéessaie dans quelques secondes.".format(pair), kb=kb_back())
-        return
-
-    status, status_msg = _signal_still_valid(sig, current)
-    is_valid = status in ("VALID_PULLBACK", "VALID_RUNNING")
-    d = "⬆️" if side=="BUY" else "⬇️"
-    sf = "ACHAT" if side=="BUY" else "VENTE"
-
-    dp = 2 if float(current) > 100 else (3 if float(current) > 10 else 5)
-    fmt_p = "{{:.{}f}}".format(dp)
-    current_fmt = fmt_p.format(float(current))
-
-    if is_valid and candles:
-        new_entry, new_sl = _adjust_entry_sl(sig, candles, current)
-        new_entry_fmt = fmt_p.format(new_entry)
-        new_sl_fmt    = fmt_p.format(new_sl)
-        new_dist = abs(new_entry - float(tp))
-        sl_dist  = abs(new_entry - new_sl)
-        new_rr   = round(new_dist / sl_dist, 1) if sl_dist > 0 else rr
-
-        msg = (
-            "🔍 <b>VÉRIFICATION SIGNAL — {}</b>\n".format(pair) +
-            "═"*22 + "\n\n" +
-            "{} {} <b>{}</b>\n\n".format(d, sf, pair) +
-            "━"*20 + "\n" +
-            "<b>SIGNAL ORIGINAL</b>\n" +
-            "  📍 Entrée : <code>{}</code>\n".format(entry) +
-            "  ✅ TP     : <code>{}</code>\n".format(tp) +
-            "  ❌ SL     : <code>{}</code>\n".format(sl) +
-            "  📐 RR     : 1:{}\n\n".format(rr) +
-            "━"*20 + "\n" +
-            "📊 <b>STATUT LIVE</b>\n" +
-            "  💹 Prix actuel : <code>{}</code>\n".format(current_fmt) +
-            "  {}\n\n".format(status_msg) +
-            "━"*20 + "\n" +
-            "⚡ <b>MISE À JOUR RECOMMANDÉE</b>\n" +
-            "  📍 Nouvelle entrée : <code>{}</code>\n".format(new_entry_fmt) +
-            "  ✅ TP (inchangé)   : <code>{}</code>\n".format(tp) +
-            "  ❌ Nouveau SL      : <code>{}</code>\n".format(new_sl_fmt) +
-            "  📐 Nouveau RR      : 1:{}\n\n".format(new_rr) +
-            "═"*22 + "\n" +
-            "🎯 Score signal : <b>{}/100</b>\n".format(sc) +
-            "⚠️ Not financial advice · @leaderodg_bot"
-        )
-        kb = {"inline_keyboard": [[
-            {"text": "🔄 Actualiser", "callback_data": "check_sig_{}".format(pair_side_key)},
-            {"text": "◀️ Retour",     "callback_data": "start"},
-        ]]}
-    elif status == "SL_HIT":
-        msg = (
-            "🔍 <b>VÉRIFICATION — {}</b>\n".format(pair) +
-            "═"*22 + "\n\n" +
-            "❌ <b>SIGNAL INVALIDÉ</b>\n\n" +
-            "  {} {} <b>{}</b>\n".format(d, sf, pair) +
-            "  💹 Prix actuel : <code>{}</code>\n".format(current_fmt) +
-            "  🛑 SL original : <code>{}</code>\n\n".format(sl) +
-            "  {} \n\n".format(status_msg) +
-            "⏳ Attends le prochain scan pour un nouveau setup."
-        )
-        kb = kb_back()
-        # Supprimer du store
-        with _ACTIVE_SIGNALS_LOCK:
-            _ACTIVE_SIGNALS.pop(pair_side_key, None)
-    elif status == "TP_HIT":
-        dist = abs(float(tp) - float(entry))
-        sl_d = abs(float(entry) - float(sl))
-        rr_real = round(dist/sl_d, 1) if sl_d > 0 else rr
-        msg = (
-            "🔍 <b>VÉRIFICATION — {}</b>\n".format(pair) +
-            "═"*22 + "\n\n" +
-            "✅ <b>TP ATTEINT !</b> 🎉\n\n" +
-            "  {} {} <b>{}</b>\n".format(d, sf, pair) +
-            "  💹 Prix actuel : <code>{}</code>\n".format(current_fmt) +
-            "  🎯 TP original : <code>{}</code>\n".format(tp) +
-            "  📐 RR réalisé  : 1:{}\n\n".format(rr_real) +
-            "  {} \n\n".format(status_msg) +
-            "🏆 Excellent trade !"
-        )
-        kb = kb_back()
-        with _ACTIVE_SIGNALS_LOCK:
-            _ACTIVE_SIGNALS.pop(pair_side_key, None)
-    else:
-        msg = (
-            "🔍 <b>VÉRIFICATION — {}</b>\n".format(pair) +
-            "  💹 Prix actuel : <code>{}</code>\n".format(current_fmt) +
-            "  {}\n\n".format(status_msg) +
-            "  📍 Entrée: <code>{}</code>  TP: <code>{}</code>  SL: <code>{}</code>".format(entry, tp, sl)
-        )
-        kb = {"inline_keyboard": [[
-            {"text": "🔄 Actualiser", "callback_data": "check_sig_{}".format(pair_side_key)},
-            {"text": "◀️ Retour",     "callback_data": "start"},
-        ]]}
-
-    tg_send(uid, msg, kb=kb)
-
 def dispatch_cb(cb):
     """Gère tous les boutons inline Telegram."""
     uid   = cb["from"]["id"]
@@ -6798,11 +6474,6 @@ def dispatch_cb(cb):
         except Exception as ex:
             tg_send(uid, "❌ {}".format(ex))
 
-    # ── Vérification signal live ─────────────────────────────
-    elif data.startswith("check_sig_"):
-        pair_side_key = data.replace("check_sig_", "", 1)
-        threading.Thread(target=handle_check_signal, args=(uid, pair_side_key), daemon=True).start()
-
     # ── Fallback ──────────────────────────────────────────────
     else:
         send_welcome(uid, uname)
@@ -6873,10 +6544,10 @@ def handle_new_group_member(uid, uname, first_name):
             "🎁 <b>Essai PRO {} jours offert !</b>\n\n"
             "👉 Clique /start pour commencer".format(
                 name, FREE_LIMIT, TRIAL_DAYS),
-            kb={"inline_keyboard": [[
-                {"text": "🚀 Démarrer", "callback_data": "start"},
-                {"text": "💎 Voir PRO",  "callback_data": "pro"},
-            ]]})
+            kb={{"inline_keyboard": [[
+                {{"text": "🚀 Démarrer", "callback_data": "start"}},
+                {{"text": "💎 Voir PRO",  "callback_data": "pro"}},
+            ]]}})
 
         # ── Recommandation groupe VIP ───────────────────────────
         time.sleep(2)
@@ -6894,10 +6565,10 @@ def handle_new_group_member(uid, uname, first_name):
             "❓ Questions sur la méthode ICT/SMC ?\n"
             "👉 Contacte directement @leaderOdg\n\n"
             "📩 Demande d'accès au groupe VIP :",
-            kb={"inline_keyboard": [[
-                {"text": "👑 Rejoindre le groupe VIP",
-                  "url": "https://t.me/leaderOdg"},
-            ]]})
+            kb={{"inline_keyboard": [[
+                {{"text": "👑 Rejoindre le groupe VIP",
+                  "url": "https://t.me/leaderOdg"}},
+            ]]}})
 
         # ── Notification admin ──────────────────────────────────
         total, pro, _, _, _ = global_stats()
@@ -6912,12 +6583,12 @@ def handle_new_group_member(uid, uname, first_name):
                 "@" + uname if uname else "—",
                 first_name or "—",
                 total, pro),
-            kb={"inline_keyboard": [[
-                {"text": "💠 Activer PRO",
-                  "callback_data": "adm_pro_{}".format(uid)},
-                {"text": "💬 Contacter",
-                  "url": "tg://user?id={}".format(uid)},
-            ]]})
+            kb={{"inline_keyboard": [[
+                {{"text": "💠 Activer PRO",
+                  "callback_data": "adm_pro_{}".format(uid)}},
+                {{"text": "💬 Contacter",
+                  "url": "tg://user?id={}".format(uid)}},
+            ]]}})
 
         log("INFO", clr("Nouveau membre: @{} ID:{} — notif admin envoyée".format(
             uname or "?", uid), "g"))
@@ -7456,3 +7127,4 @@ def main():
 
 if __name__=="__main__":
     main()
+
